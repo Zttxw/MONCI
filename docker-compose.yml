@@ -18,6 +18,11 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   internet_dashboard:
     build: ./dashboard
@@ -30,3 +35,9 @@ services:
     depends_on:
       internet_agent:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
