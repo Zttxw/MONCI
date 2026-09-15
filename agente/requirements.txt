@@ -1,0 +1,3 @@
+# Dependencias Python del agente (Ookla Speedtest se instala en Dockerfile como binario estático)
+dnspython>=2.4
+websockets>=12.0

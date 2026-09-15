@@ -1,0 +1,32 @@
+services:
+  internet_agent:
+    build: ./agente
+    container_name: internet_monitor_agent
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - SPEED_INTERVAL_MINUTES=30
+      - ISP_HOP_REFRESH_HOURS=6
+
+    volumes:
+
+      - ./data:/app/data
+      - ./data/vnstat:/var/lib/vnstat
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/app/data/monitor.db').execute('SELECT 1 FROM eventos_caida LIMIT 0')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  internet_dashboard:
+    build: ./dashboard
+    container_name: internet_monitor_dashboard
+    restart: unless-stopped
+    ports:
+      - "8085:80"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      internet_agent:
+        condition: service_healthy
