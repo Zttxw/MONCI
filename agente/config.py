@@ -12,7 +12,7 @@ PING_FAIL_THRESHOLD = int(os.getenv("PING_FAIL_THRESHOLD", "2"))
 PING_TARGETS = ["8.8.8.8", "1.1.1.1"]  # Fijos; gateway e isp_hop se detectan automáticamente
 
 # --- Velocidad (speedtest) ---
-SPEED_INTERVAL_MINUTES = float(os.getenv("SPEED_INTERVAL_MINUTES", "30"))
+SPEED_INTERVAL_MINUTES = float(os.getenv("SPEED_INTERVAL_MINUTES", "15"))
 
 
 # --- Ancho de banda (vnstat) ---

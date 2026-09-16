@@ -5,7 +5,7 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      - SPEED_INTERVAL_MINUTES=30
+      - SPEED_INTERVAL_MINUTES=15
       - ISP_HOP_REFRESH_HOURS=6
 
     volumes:
