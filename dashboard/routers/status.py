@@ -571,6 +571,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <div class="table-wrapper">
+        <div class="table-head-bar">HISTORIAL DE LENTITUD / DEGRADACIÓN</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Fuente</th>
+              <th>Severidad</th>
+              <th>Velocidad Medida</th>
+              <th>Inicio</th>
+              <th>Duración</th>
+            </tr>
+          </thead>
+          <tbody id="degTableBody">
+            <tr><td colspan="5" class="empty-row">Cargando registros...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrapper">
         <div class="table-head-bar">HISTORIAL DE FALLAS DNS</div>
         <table>
           <thead>
@@ -1313,8 +1331,47 @@ function renderDNSTable(list) {
   }).join('');
 }
 
+async function loadDegradacionesTable() {
+  const desde = document.getElementById('dateDesde').value || '2020-01-01';
+  const hasta = document.getElementById('dateHasta').value || '2099-12-31';
+  try {
+    const res = await fetch(`/degradaciones?desde=${desde}&hasta=${hasta}`);
+    const data = await res.json();
+    renderDegradacionesTable(data);
+  } catch (err) {
+    console.error("Error cargando degradaciones:", err);
+  }
+}
+
+function renderDegradacionesTable(list) {
+  const tbody = document.getElementById('degTableBody');
+  if (!tbody) return;
+  if (!list || list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">Sin eventos de lentitud registradas en el período seleccionado</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.map(c => {
+    const fuenteStr = c.fuente === 'oficial' ? 'OFICIAL (Ookla)' : 'SONDA LIVIANA';
+    const duracion = c.duracion_segundos ? formatDuration(c.duracion_segundos) : 'En curso';
+    const isCritica = c.severidad === 'critica';
+    const tagClass = isCritica ? 'tag-isp-general' : 'tag-isp-primer';
+
+    return `
+      <tr>
+        <td><strong>${fuenteStr}</strong></td>
+        <td class="${tagClass}">${c.severidad ? c.severidad.toUpperCase() : 'DEGRADADA'}</td>
+        <td>${c.velocidad_mbps ? c.velocidad_mbps.toFixed(1) : 0} Mbps (base: ${c.baseline_mbps ? c.baseline_mbps.toFixed(0) : 0}M)</td>
+        <td>${formatDate(c.inicio)}</td>
+        <td>${duracion}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
 function filterAll() {
   loadCaidasTable();
+  loadDegradacionesTable();
   loadDNSTable();
   loadChartsData();
 }
@@ -1371,6 +1428,7 @@ function init() {
   fetchStatus();
   loadChartsData();
   loadCaidasTable();
+  loadDegradacionesTable();
   loadDNSTable();
 
   setInterval(() => {
