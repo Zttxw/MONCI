@@ -74,6 +74,75 @@ CREATE TABLE IF NOT EXISTS metadata (
     clave TEXT PRIMARY KEY,
     valor TEXT NOT NULL
 );
+
+-- ===========================================================================
+-- TABLAS ARQUITECTURA V2 — Detección con FSM Mealy y Sensores L0/L1/L2
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS v2_l0_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME NOT NULL,
+    is_reachable BOOLEAN NOT NULL,
+    target TEXT NOT NULL,
+    latency_ms REAL,
+    packet_loss_pct REAL,
+    sub_checks TEXT
+);
+
+CREATE TABLE IF NOT EXISTS v2_l1_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME NOT NULL,
+    throughput_mbps REAL NOT NULL,
+    total_time_ms REAL NOT NULL,
+    dns_ms REAL,
+    tcp_ms REAL,
+    tls_ms REAL,
+    ttfb_ms REAL,
+    transfer_ms REAL,
+    streams_used INTEGER,
+    baseline_mbps REAL,
+    is_degraded BOOLEAN NOT NULL,
+    is_valid BOOLEAN NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS v2_l2_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME NOT NULL,
+    download_mbps REAL NOT NULL,
+    upload_mbps REAL NOT NULL,
+    ping_ms REAL NOT NULL,
+    loaded_latency_ms REAL,
+    baseline_mbps REAL,
+    server_id INTEGER,
+    server_name TEXT
+);
+
+CREATE TABLE IF NOT EXISTS v2_fsm_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME NOT NULL,
+    current_state TEXT NOT NULL,
+    input_symbol TEXT NOT NULL,
+    next_state TEXT NOT NULL,
+    output_action TEXT NOT NULL,
+    is_reentry BOOLEAN NOT NULL DEFAULT 0,
+    readings_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS v2_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    state_origin TEXT NOT NULL,
+    start_time DATETIME NOT NULL,
+    end_time DATETIME,
+    duration_seconds INTEGER,
+    is_active BOOLEAN NOT NULL DEFAULT 1,
+    l0_status TEXT,
+    l1_throughput REAL,
+    l2_download REAL,
+    diagnosis_code TEXT,
+    diagnosis_detail TEXT,
+    evidence_json TEXT
+);
 """
 
 
@@ -499,4 +568,239 @@ def get_open_evento_degradacion(fuente: str) -> Optional[dict]:
         if row:
             return dict(row)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Helpers V2 — Sensores, FSM Eventos y Trazabilidad de Transiciones
+# ---------------------------------------------------------------------------
+
+import json
+
+
+def insert_v2_l0_reading(
+    timestamp: datetime,
+    is_reachable: bool,
+    target: str,
+    latency_ms: Optional[float] = None,
+    packet_loss_pct: Optional[float] = None,
+    sub_checks: Optional[dict] = None,
+) -> None:
+    """Inserta una lectura del Sensor L0 (Conectividad/Alcance)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO v2_l0_readings "
+            "(timestamp, is_reachable, target, latency_ms, packet_loss_pct, sub_checks) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                timestamp.isoformat(),
+                1 if is_reachable else 0,
+                target,
+                latency_ms,
+                packet_loss_pct,
+                json.dumps(sub_checks) if sub_checks else None,
+            ),
+        )
+
+
+def insert_v2_l1_reading(
+    timestamp: datetime,
+    throughput_mbps: float,
+    total_time_ms: float,
+    dns_ms: Optional[float] = None,
+    tcp_ms: Optional[float] = None,
+    tls_ms: Optional[float] = None,
+    ttfb_ms: Optional[float] = None,
+    transfer_ms: Optional[float] = None,
+    streams_used: int = 1,
+    baseline_mbps: Optional[float] = None,
+    is_degraded: bool = False,
+    is_valid: bool = True,
+) -> None:
+    """Inserta una lectura del Sensor L1 (Probe Liviano de Rendimiento)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO v2_l1_readings "
+            "(timestamp, throughput_mbps, total_time_ms, dns_ms, tcp_ms, tls_ms, ttfb_ms, "
+            "transfer_ms, streams_used, baseline_mbps, is_degraded, is_valid) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                timestamp.isoformat(),
+                throughput_mbps,
+                total_time_ms,
+                dns_ms,
+                tcp_ms,
+                tls_ms,
+                ttfb_ms,
+                transfer_ms,
+                streams_used,
+                baseline_mbps,
+                1 if is_degraded else 0,
+                1 if is_valid else 0,
+            ),
+        )
+
+
+def insert_v2_l2_reading(
+    timestamp: datetime,
+    download_mbps: float,
+    upload_mbps: float,
+    ping_ms: float,
+    loaded_latency_ms: Optional[float] = None,
+    baseline_mbps: Optional[float] = None,
+    server_id: Optional[int] = None,
+    server_name: Optional[str] = None,
+) -> None:
+    """Inserta una lectura del Sensor L2 (Ookla Speedtest de Alta Precisión)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO v2_l2_readings "
+            "(timestamp, download_mbps, upload_mbps, ping_ms, loaded_latency_ms, "
+            "baseline_mbps, server_id, server_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                timestamp.isoformat(),
+                download_mbps,
+                upload_mbps,
+                ping_ms,
+                loaded_latency_ms,
+                baseline_mbps,
+                server_id,
+                server_name,
+            ),
+        )
+
+
+def insert_v2_fsm_transition(
+    timestamp: datetime,
+    current_state: str,
+    input_symbol: str,
+    next_state: str,
+    output_action: str,
+    is_reentry: bool = False,
+    readings_json: Optional[dict] = None,
+) -> None:
+    """Registra un paso o transición en la máquina de estados FSM Mealy."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO v2_fsm_history "
+            "(timestamp, current_state, input_symbol, next_state, output_action, is_reentry, readings_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                timestamp.isoformat(),
+                current_state,
+                input_symbol,
+                next_state,
+                output_action,
+                1 if is_reentry else 0,
+                json.dumps(readings_json) if readings_json else None,
+            ),
+        )
+
+
+def insert_v2_event(
+    event_type: str,
+    state_origin: str,
+    start_time: datetime,
+    l0_status: Optional[str] = None,
+    l1_throughput: Optional[float] = None,
+    l2_download: Optional[float] = None,
+    diagnosis_code: Optional[str] = None,
+    diagnosis_detail: Optional[dict] = None,
+    evidence: Optional[dict] = None,
+) -> int:
+    """Abre un nuevo evento en V2. Retorna el ID generado."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO v2_events "
+            "(event_type, state_origin, start_time, l0_status, l1_throughput, l2_download, "
+            "diagnosis_code, diagnosis_detail, evidence_json, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            (
+                event_type,
+                state_origin,
+                start_time.isoformat(),
+                l0_status,
+                l1_throughput,
+                l2_download,
+                diagnosis_code,
+                json.dumps(diagnosis_detail) if diagnosis_detail else None,
+                json.dumps(evidence) if evidence else None,
+            ),
+        )
+        event_id = cursor.lastrowid
+        logger.info(
+            "Evento V2 abierto id=%d tipo=%s origen=%s inicio=%s",
+            event_id, event_type, state_origin, start_time.isoformat(),
+        )
+        return event_id
+
+
+def close_v2_event(
+    event_id: int,
+    fin: datetime,
+    diagnosis_code: Optional[str] = None,
+    diagnosis_detail: Optional[dict] = None,
+    evidence: Optional[dict] = None,
+) -> None:
+    """Cierra un evento V2 activo."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT start_time FROM v2_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        if not row:
+            logger.warning("Evento V2 id=%d no encontrado al intentar cerrar", event_id)
+            return
+
+        inicio = datetime.fromisoformat(row["start_time"])
+        duracion = int((fin - inicio).total_seconds())
+        
+        updates = ["end_time = ?", "duration_seconds = ?", "is_active = 0"]
+        params = [fin.isoformat(), duracion]
+
+        if diagnosis_code:
+            updates.append("diagnosis_code = ?")
+            params.append(diagnosis_code)
+        if diagnosis_detail:
+            updates.append("diagnosis_detail = ?")
+            params.append(json.dumps(diagnosis_detail))
+        if evidence:
+            updates.append("evidence_json = ?")
+            params.append(json.dumps(evidence))
+
+        params.append(event_id)
+        sql = f"UPDATE v2_events SET {', '.join(updates)} WHERE id = ?"
+        conn.execute(sql, params)
+        logger.info(
+            "Evento V2 cerrado id=%d fin=%s duración=%ds",
+            event_id, fin.isoformat(), duracion,
+        )
+
+
+def get_active_v2_event() -> Optional[dict]:
+    """Retorna el evento V2 actualmente activo (is_active = 1), si existe."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM v2_events WHERE is_active = 1 ORDER BY start_time DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            return dict(row)
+    return None
+
+
+def get_v2_fsm_history(limit: int = 50) -> list[dict]:
+    """Retorna los últimos N registros del historial de transiciones FSM."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM v2_fsm_history ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_v2_events(limit: int = 50) -> list[dict]:
+    """Retorna los últimos N eventos V2."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM v2_events ORDER BY start_time DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 

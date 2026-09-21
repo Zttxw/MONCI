@@ -22,12 +22,8 @@ from utils import (
     isp_hop_refresh_loop,
     MutableValue,
 )
-from checks.connectivity import connectivity_loop
-from checks.speed import speed_loop
-from checks.light_probe import light_probe_loop
-from checks.bandwidth import bandwidth_loop
-from checks.dns import dns_loop
 from checks.shared import SpeedtestWindow
+from engine.orchestrator import V2Orchestrator
 
 # Logging estructurado a stdout para `docker logs`
 logging.basicConfig(
@@ -41,7 +37,7 @@ logger = logging.getLogger("agente")
 
 
 async def main() -> None:
-    logger.info("=== Agente de monitoreo de internet iniciando ===")
+    logger.info("=== Agente de monitoreo de internet V2 (Candidata Limpia) iniciando ===")
 
     # 1. Inicializar base de datos
     init_db()
@@ -57,7 +53,7 @@ async def main() -> None:
     logger.info("Gateway: %s — Interfaz: %s", gateway_ip, interface)
     set_metadata("gateway_ip", gateway_ip)
 
-    # 3. Detectar ISP first hop (puede ser None si no se encuentra)
+    # 3. Detectar ISP first hop
     isp_hop_ip = await get_isp_first_hop(gateway_ip)
     isp_hop_holder = MutableValue()
     isp_hop_holder.set(isp_hop_ip)
@@ -65,24 +61,20 @@ async def main() -> None:
     if isp_hop_ip:
         set_metadata("isp_hop", isp_hop_ip)
         logger.info("ISP first hop: %s", isp_hop_ip)
-    else:
-        logger.warning(
-            "No se detectó ISP first hop — el monitoreo continuará sin ese tier"
-        )
 
     # 4. Crear objeto compartido para bufferbloat
     window = SpeedtestWindow()
 
-    # 5. Lanzar los 6 loops en paralelo (ninguno bloquea a los otros)
-    logger.info("Lanzando loops de monitoreo...")
+    # 5. Instanciar y ejecutar el Orquestador V2 como ÚNICO motor activo
+    orchestrator = V2Orchestrator(window=window)
+
+    logger.info("Lanzando motor V2 como único detector oficial...")
     await asyncio.gather(
-        connectivity_loop(gateway_ip, isp_hop_holder, window),
-        speed_loop(window),
-        light_probe_loop(window),
-        bandwidth_loop(interface),
-        dns_loop(),
         isp_hop_refresh_loop(isp_hop_holder, gateway_ip),
+        orchestrator.run_loop(interval_seconds=30),
     )
+
+
 
 
 if __name__ == "__main__":
