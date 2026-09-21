@@ -209,6 +209,10 @@ class V2Orchestrator:
                 "download_mbps": self.latest_l2.download_mbps if self.latest_l2 else None,
                 "ping_ms": self.latest_l2.ping_ms if self.latest_l2 else None,
             } if self.latest_l2 else None,
+            "fsm": {
+                "recovery_counter": self.fsm.recovery_counter,
+                "recovery_k": self.fsm.recovery_k,
+            },
         }
 
         # 4. Procesar símbolo en FSM Mealy

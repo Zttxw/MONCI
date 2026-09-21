@@ -3,11 +3,11 @@
 Transforma lecturas continuas e independientes de los sensores L0, L1 y L2
 en los símbolos discretos aceptados por la máquina de estados FSM Mealy:
 
-  n  -> lectura normal con evidencia SALUDABLE y FRESCA de L0 y L1
+  n  -> evidencia SALUDABLE y FRESCA de L0 y L1
   a  -> anomalía en sensor liviano L1 (throughput degradado)
   co -> caída total en L0 (incomunicación confirmada)
   cd -> degradación de velocidad confirmada por sensor oficial L2
-  d  -> normalización / recuperación observada
+  d  -> descarte/rechazo explícito de L2 durante CONFIRMANDO
 
 REGLA FUNDAMENTAL DE DISEÑO:
   Falta de evidencia ≠ Evidencia Saludable
@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from config import SENSOR_FRESHNESS_SECONDS, LIGHT_PROBE_COOLDOWN_SECONDS
+from config import SENSOR_FRESHNESS_SECONDS
 from engine.models import L0Reading, L1Reading, L2Reading, InputSymbol, FsmState
 
 
@@ -49,9 +49,11 @@ class Discretizer:
 
         Prioridades:
         1. Caída Total L0 (L0 presente, fresco y no alcanzable) -> InputSymbol.CO
-        2. Degradación L2 (L2 presente, fresco y degradado) -> InputSymbol.CD
+        2. Evaluación de L2 (si L2 está fresco):
+           - L2 degradado -> InputSymbol.CD (confirma degradación)
+           - L2 sano en CONFIRMANDO -> InputSymbol.D (descarte/rechazo de sospecha)
         3. Anomalía L1 (L1 presente, fresco, válido y degradado) -> InputSymbol.A
-        4. Evidencia Saludable (L0 presente, fresco, alcanzable Y L1 presente, fresco, válido, sano) -> InputSymbol.D / InputSymbol.N
+        4. Evidencia Saludable (L0 presente, fresco, alcanzable Y L1 presente, fresco, válido, sano) -> InputSymbol.N
         5. Falta de evidencia suficiente -> None (SIN_EVIDENCIA)
         """
         ref_time = now or datetime.now(timezone.utc)
@@ -66,7 +68,7 @@ class Discretizer:
             logger.info("Discretizador: L0 incomunicado -> 'co'")
             return InputSymbol.CO
 
-        # 2. Prioridad 2: Degradación confirmada por L2
+        # 2. Prioridad 2: Evaluación de Sensor L2
         if l2_fresh:
             if l2.baseline_mbps and l2.baseline_mbps > 0:
                 is_l2_degraded = l2.download_mbps < (l2.baseline_mbps * 0.5)
@@ -76,6 +78,9 @@ class Discretizer:
             if is_l2_degraded:
                 logger.info("Discretizador: L2 confirma degradación -> 'cd'")
                 return InputSymbol.CD
+            elif current_state == FsmState.CONFIRMANDO:
+                logger.info("Discretizador: L2 sano descarta sospecha en CONFIRMANDO -> 'd'")
+                return InputSymbol.D
 
         # 3. Prioridad 3: Anomalía detectada en L1
         if l1_fresh and l1.is_degraded:
@@ -86,13 +91,8 @@ class Discretizer:
         l0_ok = l0_fresh and l0.is_reachable
         l1_ok = l1_fresh and not l1.is_degraded
 
-        # RECLA ESTRICTA: Para confirmar normalidad, necesitamos evidencia fresca de L0 (y si L1 está disponible, sano)
         if l0_ok and (not l1 or l1_ok):
-            if current_state in (FsmState.SOSPECHA, FsmState.CONFIRMANDO, FsmState.EVENTO):
-                logger.info("Discretizador: Evidencia saludable desde %s -> 'd'", current_state.value)
-                return InputSymbol.D
-
-            # En estado NORMAL con evidencia saludable
+            logger.info("Discretizador: Evidencia saludable de sensores -> 'n'")
             return InputSymbol.N
 
         # 5. Si falta evidencia o los datos están obsoletos: NO ASUMIR SALUDABLE
