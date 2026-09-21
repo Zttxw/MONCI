@@ -88,21 +88,8 @@ class Discretizer:
 
         # RECLA ESTRICTA: Para confirmar normalidad, necesitamos evidencia fresca de L0 (y si L1 está disponible, sano)
         if l0_ok and (not l1 or l1_ok):
-            if current_state in (FsmState.SOSPECHA, FsmState.CONFIRMANDO):
+            if current_state in (FsmState.SOSPECHA, FsmState.CONFIRMANDO, FsmState.EVENTO):
                 logger.info("Discretizador: Evidencia saludable desde %s -> 'd'", current_state.value)
-                return InputSymbol.D
-
-            if current_state == FsmState.EVENTO:
-                # Regla de Cooldown pos-evento
-                if event_start_time is not None:
-                    elapsed = (ref_time - event_start_time).total_seconds()
-                    if elapsed < LIGHT_PROBE_COOLDOWN_SECONDS:
-                        logger.info(
-                            "Discretizador: Cooldown en curso (%.1fs < %ds). Se emite 'n' para mantener EVENTO.",
-                            elapsed, LIGHT_PROBE_COOLDOWN_SECONDS
-                        )
-                        return InputSymbol.N
-                logger.info("Discretizador: Recuperación confirmada en EVENTO pos-cooldown -> 'd'")
                 return InputSymbol.D
 
             # En estado NORMAL con evidencia saludable

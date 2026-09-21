@@ -148,17 +148,19 @@ class V2Orchestrator:
             finally:
                 self.l2_is_running = False
 
-    async def tick(self) -> None:
+    async def tick(self, now: Optional[datetime] = None) -> None:
         """Ejecuta una iteración de muestreo con aislamiento de fallas entre sensores."""
-        now = datetime.now(timezone.utc)
+        ref_time = now or datetime.now(timezone.utc)
 
         # 1. Medir L0 con captura defensiva de excepciones
         try:
             l0_reading = await self.l0_sensor.measure()
             self.latest_l0 = l0_reading
-            self.repository.save_l0_reading(l0_reading)
+            if l0_reading is not None:
+                self.repository.save_l0_reading(l0_reading)
         except Exception as e:
             logger.error("Error en Sensor L0 durante tick: %s", e, exc_info=True)
+            self.latest_l0 = None
             l0_reading = None
 
         # 2. Medir L1 con captura defensiva de excepciones
@@ -166,9 +168,11 @@ class V2Orchestrator:
             is_cooldown_active = self.window.is_in_cooldown
             l1_reading = await self.l1_sensor.measure(is_cooldown_active=is_cooldown_active)
             self.latest_l1 = l1_reading
-            self.repository.save_l1_reading(l1_reading)
+            if l1_reading is not None:
+                self.repository.save_l1_reading(l1_reading)
         except Exception as e:
             logger.error("Error en Sensor L1 durante tick: %s", e, exc_info=True)
+            self.latest_l1 = None
             l1_reading = None
 
         old_state_val = self.fsm.current_state
@@ -180,7 +184,7 @@ class V2Orchestrator:
             l2=self.latest_l2,
             current_state=old_state_val,
             event_start_time=self.active_event_start,
-            now=now,
+            now=ref_time,
         )
 
         # REGLA ESTRICTA: falta de evidencia != n. Si el discretizador retorna None, se omite la transición FSM.
@@ -208,7 +212,7 @@ class V2Orchestrator:
         }
 
         # 4. Procesar símbolo en FSM Mealy
-        record = self.fsm.process_symbol(symbol, timestamp=now, readings_json=readings_summary)
+        record = self.fsm.process_symbol(symbol, timestamp=ref_time, readings_json=readings_summary)
 
         # Guardar registro de transición en la base de datos a través del repositorio
         self.repository.save_fsm_transition(record)
@@ -219,7 +223,7 @@ class V2Orchestrator:
             self.l2_trigger_event.set()
 
         # 5. Manejar Acciones de Salida (OutputAction)
-        await self._handle_action(record.output_action, record.next_state, readings_summary, now)
+        await self._handle_action(record.output_action, record.next_state, readings_summary, ref_time)
 
     async def _handle_action(
         self,

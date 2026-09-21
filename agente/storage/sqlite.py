@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 class SQLiteV2Repository(V2Repository):
     """Repositorio SQLite para la arquitectura V2."""
 
-    def save_l0_reading(self, reading: L0Reading) -> None:
+    def save_l0_reading(self, reading: Optional[L0Reading]) -> None:
+        if reading is None:
+            return
         db.insert_v2_l0_reading(
             timestamp=reading.timestamp,
             is_reachable=reading.is_reachable,
@@ -34,7 +36,9 @@ class SQLiteV2Repository(V2Repository):
             sub_checks=reading.sub_checks,
         )
 
-    def save_l1_reading(self, reading: L1Reading) -> None:
+    def save_l1_reading(self, reading: Optional[L1Reading]) -> None:
+        if reading is None:
+            return
         db.insert_v2_l1_reading(
             timestamp=reading.timestamp,
             throughput_mbps=reading.throughput_mbps,
@@ -50,7 +54,9 @@ class SQLiteV2Repository(V2Repository):
             is_valid=reading.is_valid,
         )
 
-    def save_l2_reading(self, reading: L2Reading) -> None:
+    def save_l2_reading(self, reading: Optional[L2Reading]) -> None:
+        if reading is None:
+            return
         db.insert_v2_l2_reading(
             timestamp=reading.timestamp,
             download_mbps=reading.download_mbps,
