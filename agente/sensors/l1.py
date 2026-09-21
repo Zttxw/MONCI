@@ -46,11 +46,12 @@ class L1Sensor(BaseSensor):
             res = await _run_multi_stream_pycurl(self.url, streams=self.streams, timeout=15)
             throughput = res["mbps_throughput"]
             total_time = res["total_ms"]
-            dns_ms = res["dns_ms"]
-            tcp_ms = res["tcp_connect_ms"]
-            tls_ms = res["tls_ms"]
-            ttfb_ms = res["ttfb_ms"]
-            transfer_ms = res["transfer_ms"]
+            dns_ms = res.get("dns_ms")
+            tcp_ms = res.get("tcp_connect_ms")
+            tls_ms = res.get("tls_ms")
+            ttfb_ms = res.get("ttfb_ms")
+            transfer_ms = res.get("transfer_ms")
+            streams_used = res.get("streams_usados", self.streams)
             bytes_totales = res.get("bytes_totales", 0)
 
         except Exception as e:
