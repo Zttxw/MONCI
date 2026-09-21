@@ -78,7 +78,7 @@ async def main() -> None:
     await asyncio.gather(
         connectivity_loop(gateway_ip, isp_hop_holder, window),
         speed_loop(window),
-        light_probe_loop(),
+        light_probe_loop(window),
         bandwidth_loop(interface),
         dns_loop(),
         isp_hop_refresh_loop(isp_hop_holder, gateway_ip),

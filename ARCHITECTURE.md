@@ -118,18 +118,21 @@ uno lento (speedtest) nunca bloquee la detección de caídas:
   extensibilidad futura, pero la lógica de captura de señal WiFi NO se
   implementa — siempre queda NULL.
 
-**Test liviano y degradación de velocidad:**
+**Test liviano y degradación de velocidad (Fase 0):**
 - Loop cada 60s (`LIGHT_PROBE_INTERVAL_SECONDS`) en `checks/light_probe.py`.
-- Descarga de 5 MB mediante el protocolo M-Lab NDT7 WebSocket (`wss://`), consultando dinámicamente la Locate API (`https://locate.measurementlab.net/v2/nearest/ndt/ndt7`).
-- **Medición Monohilo (NDT7)**: NDT7 mide transporte masivo en un solo flujo TCP sobre WebSocket (~85-150 Mbps nominales). Se mantiene desacoplado de los tests multihilo de Ookla (~900 Mbps).
-- Registra en `mediciones_probe_liviano` (`timestamp`, `mbps_aproximado`, `tiempo_respuesta_ms`).
-- **Regla de Baselines Independientes**:
-  - Cada fuente de medición mantiene su propio baseline desacoplado:
-    - `get_baseline_mbps_oficial()`: Promedio de las últimas 20 mediciones oficiales (Ookla) en `mediciones_velocidad`.
-    - `get_baseline_mbps_liviano()`: Promedio de las últimas 20 mediciones del probe liviano (M-Lab NDT7) en `mediciones_probe_liviano`.
-  - Nunca se mezclan ni se comparan los resultados de una fuente contra el baseline de la otra.
-  - Requiere un mínimo de 20 mediciones acumuladas antes de comenzar a evaluar degradaciones de servicio.
-- **Manejo defensivo de errores no-red**: Si Locate API retorna HTTP 429 (Rate Limit) o fallos 4xx/5xx/WebSocket, se registra WARNING y se salta la iteración sin abrir falsos eventos de degradación.
+- **Descomposición de Tiempos HTTP (PycURL)**: Mide con precisión de microsegundos: `dns_ms`, `tcp_connect_ms`, `tls_ms`, `ttfb_ms`, `transfer_ms`, `mbps_throughput` y `mbps_aproximado`.
+- **Streams Paralelos (3 Conexiones TCP)**: Ejecuta `LIGHT_PROBE_STREAMS = 3` conexiones concurrentes.
+  - Throughput agregado: `bytes_totales / transfer_wall_ms` (duración de transferencia del cuerpo en tiempo de pared).
+  - Tiempos de fase: `max()` entre los 3 streams para `dns_ms`, `tcp_connect_ms`, `tls_ms` y `ttfb_ms` (peor caso para detección de degradaciones).
+- **Semántica de `mbps_throughput` vs `mbps_aproximado` y Decisión de Diseño sobre Baseline**:
+  - `mbps_throughput`: Mide la tasa de transferencia pura del payload excluyendo la fase de conexión HTTP (`transfer_ms`). Es el valor principal usado para evaluar degradaciones.
+  - `mbps_aproximado`: Mide la tasa global sobre el tiempo de pared total acumulado (`total_ms`), manteniendo compatibilidad histórica.
+  - **Limitación Consciente y Trade-off de Fase 0 (M-Lab NDT7 Fallback)**: En la sonda primaria (Cloudflare via PycURL multi-stream), `mbps_throughput` excluye el overhead de setup. En el fallback secundario de M-Lab (vía NDT7 WebSocket), `mbps_throughput` se asigna igual al throughput NDT7 (`mbps_aproximado`). Dado que M-Lab solo se activa excepcionalmente tras un fallo total de la sonda HTTP de Cloudflare, la abrumadora mayoría (>99%) de muestras sanas en estado normal derivan de Cloudflare. Por ende, la mediana del baseline no se ve contaminada en operación habitual. Mantener un baseline único en `COALESCE(mbps_throughput, mbps_aproximado)` es una decisión consciente para evitar la complejidad de segmentar baselines por proveedor en esta iteración.
+- **Ventana de Cooldown Post-Speedtest (60s)**: Durante los 60 segundos posteriores a cada test oficial de Ookla, la muestra se toma e inserta con `muestra_valida = 0` para diagnóstico pero se excluye del baseline y no evalúa degradaciones (`LIGHT_PROBE_COOLDOWN_SECONDS`).
+- **Regla de Baselines con Mediana e Hysteresis**:
+  - Baseline de probe liviano usa `statistics.median` sobre las últimas 20 muestras sanas (`muestra_valida = 1`).
+  - Se requiere un umbral de **2 fallos consecutivos (2 minutos)** para abrir un evento de degradación en la fuente liviana.
+- **Optimización Futura (SaaS)**: Para escalar a múltiples clientes con consumo controlado, las descargas paralelas podrán usar HTTP Range requests dividiendo el archivo entre los 3 streams.
 
 
 

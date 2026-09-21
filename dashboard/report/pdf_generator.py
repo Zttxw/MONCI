@@ -265,14 +265,20 @@ def generate_report_pdf(
         story.append(Spacer(1, 16))
 
     # --- Eventos de degradación de velocidad ---
-    if eventos_degradacion:
+    # Filtrar micro-variaciones transitorias (< 120s) del probe liviano
+    eventos_deg_reales = [
+        d for d in (eventos_degradacion or [])
+        if d.get("fuente") == "oficial" or d.get("duracion_segundos") is None or d.get("duracion_segundos") >= 120
+    ]
+
+    if eventos_deg_reales:
         story.append(Paragraph("Eventos de degradación de velocidad", section_style))
 
         deg_header = [
             "#", "Fuente", "Severidad", "Medido", "Baseline", "Inicio", "Fin", "Duración"
         ]
         deg_rows = [deg_header]
-        for i, d in enumerate(eventos_degradacion, 1):
+        for i, d in enumerate(eventos_deg_reales, 1):
             fuente_str = "Oficial (Ookla)" if d.get("fuente") == "oficial" else "Liviano (Cloudflare)"
             sev_str = str(d.get("severidad", "")).capitalize()
 

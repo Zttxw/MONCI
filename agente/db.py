@@ -89,6 +89,15 @@ _MIGRATIONS = [
     "ALTER TABLE eventos_degradacion ADD COLUMN severidad TEXT",
     "ALTER TABLE eventos_degradacion ADD COLUMN duracion_segundos INTEGER",
     "ALTER TABLE mediciones_probe_liviano ADD COLUMN servidor TEXT",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN dns_ms REAL",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN tcp_connect_ms REAL",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN tls_ms REAL",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN ttfb_ms REAL",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN transfer_ms REAL",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN mbps_throughput REAL",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN latencia_ms REAL",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN streams_usados INTEGER DEFAULT 1",
+    "ALTER TABLE mediciones_probe_liviano ADD COLUMN muestra_valida INTEGER DEFAULT 1",
 ]
 
 
@@ -331,20 +340,54 @@ def get_metadata(clave: str) -> Optional[str]:
 # Helpers — probe liviano y degradación de velocidad
 # ---------------------------------------------------------------------------
 
+import statistics
+
 def insert_medicion_probe_liviano(
-    mbps_aproximado: float, tiempo_respuesta_ms: float, servidor: Optional[str] = None
+    mbps_aproximado: float,
+    tiempo_respuesta_ms: float,
+    servidor: Optional[str] = None,
+    dns_ms: Optional[float] = None,
+    tcp_connect_ms: Optional[float] = None,
+    tls_ms: Optional[float] = None,
+    ttfb_ms: Optional[float] = None,
+    transfer_ms: Optional[float] = None,
+    mbps_throughput: Optional[float] = None,
+    latencia_ms: Optional[float] = None,
+    streams_usados: int = 1,
+    muestra_valida: bool = True,
 ) -> None:
-    """Inserta una medición del probe liviano de velocidad."""
+    """Inserta una medición del probe liviano de velocidad con descomposición de tiempos."""
     now = datetime.now(timezone.utc)
+    valida_int = 1 if muestra_valida else 0
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO mediciones_probe_liviano (timestamp, mbps_aproximado, tiempo_respuesta_ms, servidor) "
-            "VALUES (?, ?, ?, ?)",
-            (now.isoformat(), mbps_aproximado, tiempo_respuesta_ms, servidor),
+            "INSERT INTO mediciones_probe_liviano "
+            "(timestamp, mbps_aproximado, tiempo_respuesta_ms, servidor, "
+            "dns_ms, tcp_connect_ms, tls_ms, ttfb_ms, transfer_ms, mbps_throughput, "
+            "latencia_ms, streams_usados, muestra_valida) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                now.isoformat(),
+                mbps_aproximado,
+                tiempo_respuesta_ms,
+                servidor,
+                dns_ms,
+                tcp_connect_ms,
+                tls_ms,
+                ttfb_ms,
+                transfer_ms,
+                mbps_throughput,
+                latencia_ms,
+                streams_usados,
+                valida_int,
+            ),
         )
     logger.info(
-        "db: Probe liviano (nodo=%s): ~%.2f Mbps (tiempo=%.1fms)",
-        servidor or "N/A", mbps_aproximado, tiempo_respuesta_ms
+        "db: Probe liviano (nodo=%s, streams=%d, valida=%s): throughput=%.2f Mbps (aprox=%.2f Mbps) DNS=%.1fms TCP=%.1fms TLS=%.1fms TTFB=%.1fms Transfer=%.1fms",
+        servidor or "N/A", streams_usados, "OK" if muestra_valida else "INVAL",
+        mbps_throughput if mbps_throughput is not None else mbps_aproximado,
+        mbps_aproximado,
+        dns_ms or 0.0, tcp_connect_ms or 0.0, tls_ms or 0.0, ttfb_ms or 0.0, transfer_ms or 0.0
     )
 
 
@@ -369,11 +412,11 @@ def get_baseline_mbps_oficial(limit: int = 20, min_count: int = 20) -> Optional[
         return total / len(rows)
 
 
-def get_baseline_mbps_liviano(limit: int = 20, min_count: int = 5) -> Optional[float]:
-    """Calcula el baseline de velocidad (promedio de mbps_aproximado) usando estrictamente
-    las últimas 'limit' mediciones del probe liviano (Cloudflare en mediciones_probe_liviano).
+def get_baseline_mbps_liviano(limit: int = 20, min_count: int = 20) -> Optional[float]:
+    """Calcula el baseline de velocidad usando la MEDIANA (statistics.median) de mbps_throughput
+    (o mbps_aproximado para registros heredados) sobre las últimas 'limit' mediciones sanas (muestra_valida = 1).
     
-    Retorna None si no hay suficientes datos (< min_count mediciones).
+    Retorna None si no hay suficientes datos sanos (< min_count mediciones).
     """
     with get_connection() as conn:
         table_check = conn.execute(
@@ -382,9 +425,11 @@ def get_baseline_mbps_liviano(limit: int = 20, min_count: int = 5) -> Optional[f
         if not table_check:
             return None
 
+        # Filtrar únicamente muestras válidas (muestra_valida != 0)
         rows = conn.execute(
-            "SELECT mbps_aproximado FROM mediciones_probe_liviano "
-            "WHERE mbps_aproximado IS NOT NULL AND mbps_aproximado > 0 "
+            "SELECT COALESCE(mbps_throughput, mbps_aproximado) as mbps FROM mediciones_probe_liviano "
+            "WHERE (muestra_valida = 1 OR muestra_valida IS NULL) "
+            "AND COALESCE(mbps_throughput, mbps_aproximado) > 0 "
             "ORDER BY timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -392,8 +437,9 @@ def get_baseline_mbps_liviano(limit: int = 20, min_count: int = 5) -> Optional[f
         if len(rows) < min_count:
             return None
 
-        total = sum(r["mbps_aproximado"] for r in rows)
-        return total / len(rows)
+        vals = [r["mbps"] for r in rows]
+        return statistics.median(vals)
+
 
 
 

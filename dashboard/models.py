@@ -61,6 +61,15 @@ class MedicionProbeLiviano(BaseModel):
     mbps_aproximado: float
     tiempo_respuesta_ms: float
     servidor: Optional[str] = None
+    dns_ms: Optional[float] = None
+    tcp_connect_ms: Optional[float] = None
+    tls_ms: Optional[float] = None
+    ttfb_ms: Optional[float] = None
+    transfer_ms: Optional[float] = None
+    mbps_throughput: Optional[float] = None
+    latencia_ms: Optional[float] = None
+    streams_usados: Optional[int] = 1
+    muestra_valida: Optional[int] = 1
 
 
 class EventoDegradacion(BaseModel):

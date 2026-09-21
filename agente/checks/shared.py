@@ -25,6 +25,7 @@ class SpeedtestWindow:
     """
 
     _active: bool = False
+    _cooldown_until: float = 0.0
     _samples: list[float] = field(default_factory=list)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -38,6 +39,18 @@ class SpeedtestWindow:
     def is_active(self) -> bool:
         """True mientras un speedtest está en ejecución."""
         return self._active
+
+    @property
+    def is_in_cooldown(self) -> bool:
+        """True mientras el sistema se encuentra en la ventana de cooldown post-speedtest."""
+        import time
+        return time.monotonic() < self._cooldown_until
+
+    async def start_cooldown(self, seconds: float = 60.0) -> None:
+        """Activa la ventana de descanso (cooldown) tras finalizar el test oficial."""
+        import time
+        async with self._lock:
+            self._cooldown_until = time.monotonic() + seconds
 
     async def record_latency(self, latency_ms: float) -> None:
         """Registra una muestra de latencia si la ventana está activa."""

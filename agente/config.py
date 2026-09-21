@@ -31,6 +31,8 @@ ISP_HOP_REFRESH_HOURS = float(os.getenv("ISP_HOP_REFRESH_HOURS", "6"))
 # --- Probe Liviano de Velocidad ---
 LIGHT_PROBE_INTERVAL_SECONDS = int(os.getenv("LIGHT_PROBE_INTERVAL_SECONDS", "60"))
 LIGHT_PROBE_SIZE_MB = float(os.getenv("LIGHT_PROBE_SIZE_MB", "5.0"))
+LIGHT_PROBE_STREAMS = int(os.getenv("LIGHT_PROBE_STREAMS", "3"))
+LIGHT_PROBE_COOLDOWN_SECONDS = int(os.getenv("LIGHT_PROBE_COOLDOWN_SECONDS", "60"))
 LIGHT_PROBE_URL = os.getenv(
     "LIGHT_PROBE_URL", "https://speed.cloudflare.com/__down?bytes=5242880"
 )

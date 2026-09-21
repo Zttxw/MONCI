@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 
-from config import SPEED_INTERVAL_MINUTES
+from config import LIGHT_PROBE_COOLDOWN_SECONDS, SPEED_INTERVAL_MINUTES
 from db import insert_medicion_velocidad
 from checks.shared import SpeedtestWindow
 from checks.degradation import evaluate_degradation
@@ -85,5 +85,8 @@ async def speed_loop(window: SpeedtestWindow) -> None:
             # Asegurar que la ventana se cierre si el speedtest falla
             await window.finish()
             logger.error("Error en medición de velocidad: %s", e)
+        finally:
+            # Activar ventana de cooldown post-speedtest usando constante de config
+            await window.start_cooldown(float(LIGHT_PROBE_COOLDOWN_SECONDS))
 
         await asyncio.sleep(interval_seconds)
