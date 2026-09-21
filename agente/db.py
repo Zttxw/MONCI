@@ -482,19 +482,36 @@ def get_baseline_mbps_oficial(limit: int = 20, min_count: int = 20) -> Optional[
 
 
 def get_baseline_mbps_liviano(limit: int = 20, min_count: int = 20) -> Optional[float]:
-    """Calcula el baseline de velocidad usando la MEDIANA (statistics.median) de mbps_throughput
-    (o mbps_aproximado para registros heredados) sobre las últimas 'limit' mediciones sanas (muestra_valida = 1).
+    """Calcula el baseline de velocidad usando la MEDIANA (statistics.median) de throughput_mbps
+    sobre las últimas 'limit' mediciones sanas (is_valid = 1 / muestra_valida = 1).
     
+    Busca primero en v2_l1_readings (V2) y hace fallback a mediciones_probe_liviano (V1).
     Retorna None si no hay suficientes datos sanos (< min_count mediciones).
     """
     with get_connection() as conn:
+        # 1. Intentar V2 (v2_l1_readings)
+        v2_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l1_readings'"
+        ).fetchone()
+        if v2_check:
+            rows_v2 = conn.execute(
+                "SELECT throughput_mbps FROM v2_l1_readings "
+                "WHERE (is_valid = 1 OR is_valid IS NULL) "
+                "AND throughput_mbps > 0 "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            if len(rows_v2) >= min_count:
+                vals = [r["throughput_mbps"] for r in rows_v2]
+                return statistics.median(vals)
+
+        # 2. Fallback a V1 (mediciones_probe_liviano)
         table_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='mediciones_probe_liviano'"
         ).fetchone()
         if not table_check:
             return None
 
-        # Filtrar únicamente muestras válidas (muestra_valida != 0)
         rows = conn.execute(
             "SELECT COALESCE(mbps_throughput, mbps_aproximado) as mbps FROM mediciones_probe_liviano "
             "WHERE (muestra_valida = 1 OR muestra_valida IS NULL) "

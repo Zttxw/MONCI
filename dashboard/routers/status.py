@@ -427,7 +427,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="stat-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#C99A1E" stroke-width="2.3"><path d="M2 12h4l3-9 4 18 3-9h6"/></svg></div>
       </div>
       <div class="stat-value"><span id="statSpeedLight">—</span> <span style="font-size:13px; color:var(--text-faint); font-weight:500;">Mbps</span></div>
-      <div class="stat-sub" id="statLightServer">NDT7 monohilo</div>
+      <div class="stat-sub" id="statLightServer">Sonda Liviana PycURL</div>
     </div>
 
     <div class="stat-card" id="statCardRoute">
@@ -729,8 +729,8 @@ function renderTopAndCards(data) {
   // Stat Card 3: Sonda Continua (NDT7)
   if (data.ultimo_probe_liviano) {
     document.getElementById('statSpeedLight').textContent = data.ultimo_probe_liviano.mbps_aproximado.toFixed(1);
-    const serverName = data.ultimo_probe_liviano.servidor ? data.ultimo_probe_liviano.servidor.split('.')[0] : 'NDT7';
-    document.getElementById('statLightServer').textContent = `NDT7 monohilo · nodo ${serverName}`;
+    const serverName = data.ultimo_probe_liviano.servidor ? data.ultimo_probe_liviano.servidor : 'Cloudflare CDN';
+    document.getElementById('statLightServer').textContent = `Sonda HTTP PycURL · ${serverName}`;
   }
 
   // Stat Card 4: Ruta
@@ -944,7 +944,7 @@ function renderChartDescarga(oficialList, livianoList) {
           pointHoverBorderWidth: 3
         },
         {
-          label: 'Sonda NDT7 (Mbps)',
+          label: 'Sonda Liviana L1 (Mbps)',
           data: dataLiviano,
           borderColor: '#D97706',
           backgroundColor: 'rgba(217, 119, 6, 0.05)',
