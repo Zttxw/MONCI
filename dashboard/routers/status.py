@@ -1433,13 +1433,13 @@ function renderDegradacionesTable(list) {
   const tbody = document.getElementById('degTableBody');
   if (!tbody) return;
   if (!list || list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">Sin eventos de lentitud registradas en el período seleccionado</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">Sin eventos de lentitud registrados en el período seleccionado</td></tr>';
     return;
   }
 
   tbody.innerHTML = list.map(c => {
-    const fuenteStr = c.fuente === 'oficial' ? 'OFICIAL (Ookla)' : 'SONDA LIVIANA';
-    const duracion = c.duracion_segundos ? formatDuration(c.duracion_segundos) : 'En curso';
+    const fuenteStr = c.fuente === 'oficial' ? 'OFICIAL (Ookla)' : (c.fuente === 'liviano' ? 'SONDA LIVIANA' : c.fuente.toUpperCase());
+    const duracion = c.fin ? (c.duracion_segundos ? formatDuration(c.duracion_segundos) : 'Finalizado') : (c.duracion_segundos === 0 ? 'Archivado V1' : 'En curso');
     const isCritica = c.severidad === 'critica';
     const tagClass = isCritica ? 'tag-isp-general' : 'tag-isp-primer';
 

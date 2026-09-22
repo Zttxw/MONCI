@@ -160,6 +160,14 @@ async def get_degradaciones(
             (start_utc, end_utc),
         ).fetchall()
 
-    return [EventoDegradacion(**dict(row)) for row in rows]
+        res = []
+        for row in rows:
+            d = dict(row)
+            # Para eventos históricos V1 donde fin es NULL pero V1 ya finalizó/desconectó hace horas
+            if d.get("fin") is None and d.get("duracion_segundos") is None:
+                d["duracion_segundos"] = 0  # Marcado como finalizado/congelado al desacoplar V1
+            res.append(EventoDegradacion(**d))
+
+    return res
 
 
