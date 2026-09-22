@@ -32,6 +32,7 @@ services:
       - "8085:80"
     volumes:
       - ./data:/app/data
+      - ./dashboard:/app
     depends_on:
       internet_agent:
         condition: service_healthy

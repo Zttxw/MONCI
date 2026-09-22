@@ -40,5 +40,14 @@ app.include_router(reporte.router)
 app.include_router(dns.router)
 app.include_router(v2_api.router)
 
+from fastapi.responses import Response
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="#C2EA00"/></svg>'
+    return Response(content=svg, media_type="image/svg+xml")
+
 logger.info("Dashboard V2 iniciado correctamente")
+
+
 
