@@ -64,8 +64,10 @@ L0_PING_TARGET = os.getenv("L0_PING_TARGET", "8.8.8.8")
 L0_DNS_TARGET = os.getenv("L0_DNS_TARGET", "google.com")
 L0_DNS_SERVER = os.getenv("L0_DNS_SERVER", "8.8.8.8")
 
-# --- L1 Sensor (micro-throughput — todos configurables para calibración) ---
-L1_INTERVAL_SECONDS = int(os.getenv("L1_INTERVAL_SECONDS", "60"))
+# --- L1 Sensor (micro-throughput — muestreo adaptativo configurable) ---
+L1_INTERVAL_SECONDS = int(os.getenv("L1_INTERVAL_SECONDS", "5"))
+L1_NORMAL_INTERVAL_SECONDS = float(os.getenv("L1_NORMAL_INTERVAL_SECONDS", os.getenv("L1_INTERVAL_SECONDS", "5.0")))
+L1_SUSPECT_INTERVAL_SECONDS = float(os.getenv("L1_SUSPECT_INTERVAL_SECONDS", "1.0"))
 L1_PAYLOAD_SIZE_MB = float(os.getenv("L1_PAYLOAD_SIZE_MB", "5.0"))
 L1_STREAMS = int(os.getenv("L1_STREAMS", "3"))
 L1_SAMPLES_N = int(os.getenv("L1_SAMPLES_N", "1"))
@@ -76,6 +78,7 @@ L1_BASELINE_WINDOW = int(os.getenv("L1_BASELINE_WINDOW", "20"))
 L1_BASELINE_MIN_COUNT = int(os.getenv("L1_BASELINE_MIN_COUNT", "20"))
 _L1_DEFAULT_BYTES = int(L1_PAYLOAD_SIZE_MB * 1024 * 1024)
 L1_URL = os.getenv("L1_URL", f"https://speed.cloudflare.com/__down?bytes={_L1_DEFAULT_BYTES}")
+
 
 # --- L2 Sensor (confirmación pesada — Ookla bajo demanda) ---
 # NOTA: Estos umbrales son PROVISIONALES, no valores definitivos.

@@ -1,18 +1,16 @@
-"""Orquestador del Motor de Detección V2.
-
-Coordina los ciclos de muestreo de los sensores L0, L1, Fast y L2, ejecuta la discretización,
-evalúa la evidencia mediante el ConfirmationEngine, sincroniza las transiciones en la FSM Mealy,
-dispara la secuencia de confirmación (Fast -> Ookla) en segundo plano
-y delega la persistencia al V2Repository.
-"""
-
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
 import db
 from checks.shared import SpeedtestWindow
+from config import (
+    L1_NORMAL_INTERVAL_SECONDS,
+    L1_SUSPECT_INTERVAL_SECONDS,
+    L0_INTERVAL_SECONDS,
+)
 from engine.confirmation import ConfirmationEngine, ConfirmationOutcome
 from engine.diagnosis import diagnose_event
 from engine.discretizer import Discretizer
@@ -62,6 +60,9 @@ class V2Orchestrator:
         self.confirmation_trigger_event = asyncio.Event()
         self.confirmation_is_running = False
 
+        # Temporizador desacoplado de L0 (L0 se ejecuta cada L0_INTERVAL_SECONDS independientemente de la frecuencia de L1)
+        self.last_l0_mono = 0.0
+
         # Alias de retrocompatibilidad
         self.l2_trigger_event = self.confirmation_trigger_event
 
@@ -73,6 +74,12 @@ class V2Orchestrator:
 
         # Seguimiento del evento activo V2
         self.active_event_start: Optional[datetime] = None
+
+    def get_current_interval(self) -> float:
+        """Retorna el intervalo dinámico según el estado FSM (5s en NORMAL, 1s en SOSPECHA)."""
+        if self.fsm.current_state == FsmState.SOSPECHA:
+            return L1_SUSPECT_INTERVAL_SECONDS
+        return L1_NORMAL_INTERVAL_SECONDS
 
     def restore_state(self) -> None:
         """Recupera de forma consistente el estado de la FSM desde el repositorio tras un reinicio.
@@ -131,7 +138,7 @@ class V2Orchestrator:
             logger.info("Base de datos limpia: FSM iniciada en estado NORMAL.")
 
     def _build_readings_summary(self, ref_time: datetime, discrepancy: Optional[str] = None) -> dict:
-        """Construye un resumen estandarizado de lecturas para auditoría FSM."""
+        """Construye un resumen estandarizado de lecturas para auditoría FSM con trazabilidad temporal."""
         return {
             "l0": {
                 "reachable": self.latest_l0.is_reachable if self.latest_l0 else None,
@@ -157,8 +164,15 @@ class V2Orchestrator:
                 "ping_ms": self.latest_l2.ping_ms if self.latest_l2 else None,
             } if self.latest_l2 else None,
             "fsm": {
+                "current_state": self.fsm.current_state.value,
+                "sospecha_start": self.fsm.sospecha_start.isoformat() if self.fsm.sospecha_start else None,
+                "active_event_start": self.active_event_start.isoformat() if self.active_event_start else None,
                 "recovery_counter": self.fsm.recovery_counter,
                 "recovery_k": self.fsm.recovery_k,
+            },
+            "traceability": {
+                "first_anomaly_time": self.fsm.sospecha_start.isoformat() if self.fsm.sospecha_start else None,
+                "confirmed_at": self.active_event_start.isoformat() if self.active_event_start else None,
             },
             "discrepancy": discrepancy,
         }
@@ -241,21 +255,23 @@ class V2Orchestrator:
                 self.confirmation_is_running = False
 
     async def tick(self, now: Optional[datetime] = None) -> None:
-        """Ejecuta una iteración de muestreo con aislamiento de fallas entre sensores."""
+        """Ejecuta una iteración de muestreo con aislamiento de fallas entre sensores y desacople de frecuencia L0/L1."""
         ref_time = now or datetime.now(timezone.utc)
+        now_mono = time.monotonic()
 
-        # 1. Medir L0 con captura defensiva de excepciones
-        try:
-            l0_reading = await self.l0_sensor.measure()
-            self.latest_l0 = l0_reading
-            if l0_reading is not None:
-                self.repository.save_l0_reading(l0_reading)
-        except Exception as e:
-            logger.error("Error en Sensor L0 durante tick: %s", e, exc_info=True)
-            self.latest_l0 = None
-            l0_reading = None
+        # 1. Medir L0 de forma desacoplada (únicamente cada L0_INTERVAL_SECONDS)
+        if self.last_l0_mono == 0.0 or (now_mono - self.last_l0_mono) >= L0_INTERVAL_SECONDS:
+            try:
+                l0_reading = await self.l0_sensor.measure()
+                self.latest_l0 = l0_reading
+                self.last_l0_mono = now_mono
+                if l0_reading is not None:
+                    self.repository.save_l0_reading(l0_reading)
+            except Exception as e:
+                logger.error("Error en Sensor L0 durante tick: %s", e, exc_info=True)
+                self.latest_l0 = None
 
-        # 2. Medir L1 con captura defensiva de excepciones
+        # 2. Medir L1 (frecuencia alta adaptativa: 5s en NORMAL, 1s en SOSPECHA)
         try:
             is_cooldown_active = self.window.is_in_cooldown
             l1_reading = await self.l1_sensor.measure(is_cooldown_active=is_cooldown_active)
@@ -265,7 +281,6 @@ class V2Orchestrator:
         except Exception as e:
             logger.error("Error en Sensor L1 durante tick: %s", e, exc_info=True)
             self.latest_l1 = None
-            l1_reading = None
 
         old_state_val = self.fsm.current_state
 
@@ -307,10 +322,15 @@ class V2Orchestrator:
         readings_summary: dict,
         now: datetime,
     ) -> None:
-        """Aplica las acciones asociadas a las transiciones FSM."""
+        """Aplica las acciones asociadas a las transiciones FSM con trazabilidad temporal explícita."""
 
         if action == OutputAction.ABRIR_EVENTO_TOTAL:
             if self.fsm.active_event_id is None:
+                first_anomaly = self.fsm.sospecha_start or now
+                readings_summary["traceability"] = {
+                    "first_anomaly_time": first_anomaly.isoformat(),
+                    "confirmed_at": now.isoformat(),
+                }
                 diag_code, diag_detail = diagnose_event(self.latest_l0, self.latest_l1, self.latest_l2)
                 event_id = self.repository.open_v2_event(
                     event_type="caida_total",
@@ -326,10 +346,16 @@ class V2Orchestrator:
                 self.fsm.active_event_id = event_id
                 self.fsm.active_event_type = "caida_total"
                 self.active_event_start = now
-                logger.info("V2 Evento Caída Total abierto id=%d", event_id)
+                logger.info("V2 Evento Caída Total abierto id=%d (first_anomaly=%s, confirmed_at=%s)",
+                            event_id, first_anomaly.isoformat(), now.isoformat())
 
         elif action == OutputAction.ABRIR_EVENTO_DEGRADACION:
             if self.fsm.active_event_id is None:
+                first_anomaly = self.fsm.sospecha_start or now
+                readings_summary["traceability"] = {
+                    "first_anomaly_time": first_anomaly.isoformat(),
+                    "confirmed_at": now.isoformat(),
+                }
                 diag_code, diag_detail = diagnose_event(self.latest_l0, self.latest_l1, self.latest_l2)
                 event_id = self.repository.open_v2_event(
                     event_type="degradacion_velocidad",
@@ -345,26 +371,38 @@ class V2Orchestrator:
                 self.fsm.active_event_id = event_id
                 self.fsm.active_event_type = "degradacion_velocidad"
                 self.active_event_start = now
-                logger.info("V2 Evento Degradación abierto id=%d", event_id)
+                logger.info("V2 Evento Degradación abierto id=%d (first_anomaly=%s, confirmed_at=%s)",
+                            event_id, first_anomaly.isoformat(), now.isoformat())
 
         elif action == OutputAction.CERRAR_EVENTO:
             if self.fsm.active_event_id is not None:
+                # recovered_at corresponde exactamente al instante de la tercera lectura saludable que completa 3/3 recovery
+                recovered_at = now
+                readings_summary["traceability"] = {
+                    "first_anomaly_time": self.fsm.sospecha_start.isoformat() if self.fsm.sospecha_start else None,
+                    "confirmed_at": self.active_event_start.isoformat() if self.active_event_start else None,
+                    "recovered_at": recovered_at.isoformat(),
+                }
                 diag_code, diag_detail = diagnose_event(self.latest_l0, self.latest_l1, self.latest_l2)
                 self.repository.close_v2_event(
                     event_id=self.fsm.active_event_id,
-                    fin=now,
+                    fin=recovered_at,
                     diagnosis_code=diag_code,
                     diagnosis_detail=diag_detail,
                     evidence=readings_summary,
                 )
-                logger.info("V2 Evento cerrado id=%d", self.fsm.active_event_id)
+                logger.info("V2 Evento cerrado id=%d en recovered_at=%s (3/3 lectura sana)",
+                            self.fsm.active_event_id, recovered_at.isoformat())
                 self.fsm.active_event_id = None
                 self.fsm.active_event_type = None
                 self.active_event_start = None
 
-    async def run_loop(self, interval_seconds: int = 30) -> None:
-        """Loop principal del orquestador V2."""
-        logger.info("V2 Orquestador iniciado — intervalo de tick: %ds", interval_seconds)
+    async def run_loop(self, interval_seconds: Optional[float] = None) -> None:
+        """Loop principal del orquestador V2 con muestreo adaptativo L1 y compensación de drift temporal."""
+        logger.info(
+            "V2 Orquestador iniciado — muestreo adaptativo L1 (NORMAL: %.1fs, SOSPECHA: %.1fs)",
+            L1_NORMAL_INTERVAL_SECONDS, L1_SUSPECT_INTERVAL_SECONDS
+        )
         
         # Restaurar estado FSM desde la base de datos antes de iniciar el ciclo
         self.restore_state()
@@ -373,9 +411,14 @@ class V2Orchestrator:
         asyncio.create_task(self._confirmation_worker_loop())
 
         while True:
+            tick_start_mono = time.monotonic()
             try:
                 await self.tick()
             except Exception as e:
                 logger.error("Error en tick de V2 Orquestador: %s", e, exc_info=True)
 
-            await asyncio.sleep(interval_seconds)
+            # Determinar el intervalo dinámico (o usar el estático si se pasó explícitamente en tests)
+            target_interval = interval_seconds if interval_seconds is not None else self.get_current_interval()
+            tick_duration = time.monotonic() - tick_start_mono
+            sleep_remaining = max(0.0, target_interval - tick_duration)
+            await asyncio.sleep(sleep_remaining)

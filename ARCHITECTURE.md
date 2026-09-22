@@ -310,4 +310,15 @@ $$\text{L0/L1} \xrightarrow{\text{anomalía}} \text{SOSPECHA} \xrightarrow{\text
 - **Protección de Baseline Fast**: `FAST_MIN_BASELINE_SAMPLES = 5` requeridas antes de usar el baseline calculado. Usa `FAST_DEFAULT_BASELINE_MBPS = 250.0` durante el arranque.
 - **Registro de Discrepancias**: Todas las divergencias metodológicas entre sensores se persisten para auditoría sin asumir causalidad errónea.
 
-
+### 5. Muestreo Adaptativo L1 y Trazabilidad Temporal
+- **Muestreo Dinámico L1**:
+  - `NORMAL`: Muestrea L1 cada 5.0 s (`L1_NORMAL_INTERVAL_SECONDS`).
+  - `SOSPECHA`: Aumenta la resolución temporal de L1 a 1.0 s (`L1_SUSPECT_INTERVAL_SECONDS`).
+  - `NORMAL` tras recuperación: Retorna automáticamente a 5.0 s.
+- **Desacople de Frecuencia L0**: L0 se mide únicamente cada 60.0 s (`L0_INTERVAL_SECONDS`), independientemente de si L1 acelera a 1.0 s en `SOSPECHA`.
+- **Compensación de Drift Temporal**: El intervalo representa el período exacto entre **INICIOS** de tick ($t_{\text{start}}$), descontando la duración consumida por el tick:
+  $$t_{\text{sleep}} = \max\left(0.0, \text{target\_interval} - (\text{time.monotonic}() - t_{\text{tick\_start}})\right)$$
+- **Trazabilidad Temporal de Eventos**:
+  - `first_anomaly_time`: Instante en que la FSM entró por primera vez a `SOSPECHA` (`fsm.sospecha_start`).
+  - `confirmed_at`: Instante en que Ookla/FSM transicionó a `EVENTO` (`active_event_start`).
+  - `recovered_at`: Instante exacto de la tercera lectura saludable ($3/3$) que cierra el evento (`fin`).
