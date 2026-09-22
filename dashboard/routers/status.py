@@ -83,7 +83,7 @@ def _get_estado_dns() -> EstadoDNS | None:
         if v2_l0_check:
             row_l0 = conn.execute("SELECT * FROM v2_l0_readings ORDER BY timestamp DESC LIMIT 1").fetchone()
             if row_l0:
-                sub_checks = row_l0.get("sub_checks")
+                sub_checks = row_l0["sub_checks"] if "sub_checks" in row_l0.keys() else None
                 is_dns_ok = True
                 if sub_checks:
                     import json
