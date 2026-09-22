@@ -92,6 +92,20 @@ class L2Reading:
     server_name: Optional[str] = None
 
 
+@dataclass
+class FastReading:
+    """Lectura del Sensor Fast.com (Infraestructura de Medición de Netflix)."""
+    timestamp: datetime
+    throughput_mbps: float
+    duration_ms: float
+    bytes_downloaded: int
+    is_valid: bool = True
+    error: Optional[str] = None
+    server_name: Optional[str] = None
+    baseline_mbps: Optional[float] = None
+    is_degraded: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Dataclasses — Estado FSM y Auditoría
 # ---------------------------------------------------------------------------

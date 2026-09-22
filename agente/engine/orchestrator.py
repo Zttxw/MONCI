@@ -1,7 +1,8 @@
 """Orquestador del Motor de Detección V2.
 
-Coordina los ciclos de muestreo de los sensores L0, L1 y L2, ejecuta la discretización,
-sincroniza las transiciones en la FSM Mealy, dispara el test L2 en segundo plano
+Coordina los ciclos de muestreo de los sensores L0, L1, Fast y L2, ejecuta la discretización,
+evalúa la evidencia mediante el ConfirmationEngine, sincroniza las transiciones en la FSM Mealy,
+dispara la secuencia de confirmación (Fast -> Ookla) en segundo plano
 y delega la persistencia al V2Repository.
 """
 
@@ -10,7 +11,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+import db
 from checks.shared import SpeedtestWindow
+from engine.confirmation import ConfirmationEngine, ConfirmationOutcome
 from engine.diagnosis import diagnose_event
 from engine.discretizer import Discretizer
 from engine.fsm import MealyFSM
@@ -21,7 +24,9 @@ from engine.models import (
     L0Reading,
     L1Reading,
     L2Reading,
+    FastReading,
 )
+from sensors.fast import FastSensor
 from sensors.l0 import L0Sensor
 from sensors.l1 import L1Sensor
 from sensors.l2 import L2Sensor
@@ -45,19 +50,25 @@ class V2Orchestrator:
 
         self.fsm = MealyFSM(initial_state=FsmState.NORMAL)
         self.discretizer = Discretizer()
+        self.confirmation_engine = ConfirmationEngine()
 
         # Sensores V2
         self.l0_sensor = L0Sensor()
         self.l1_sensor = L1Sensor()
+        self.fast_sensor = FastSensor()
         self.l2_sensor = L2Sensor(window=self.window)
 
-        # Evento y candado de disparo para L2 (previene ejecuciones concurrentes)
-        self.l2_trigger_event = asyncio.Event()
-        self.l2_is_running = False
+        # Evento y candado de disparo para la secuencia de confirmación
+        self.confirmation_trigger_event = asyncio.Event()
+        self.confirmation_is_running = False
+
+        # Alias de retrocompatibilidad
+        self.l2_trigger_event = self.confirmation_trigger_event
 
         # Últimas lecturas en memoria
         self.latest_l0: Optional[L0Reading] = None
         self.latest_l1: Optional[L1Reading] = None
+        self.latest_fast: Optional[FastReading] = None
         self.latest_l2: Optional[L2Reading] = None
 
         # Seguimiento del evento activo V2
@@ -109,8 +120,8 @@ class V2Orchestrator:
                 self.fsm.current_state = last_state
                 logger.info("FSM reanudada en estado %s desde el historial.", last_state.value)
                 if last_state == FsmState.CONFIRMANDO:
-                    logger.info("FSM reanudada en CONFIRMANDO — activando disparo L2 de re-verificación.")
-                    self.l2_trigger_event.set()
+                    logger.info("FSM reanudada en CONFIRMANDO — activando secuencia de confirmación.")
+                    self.confirmation_trigger_event.set()
             else:
                 self.fsm.current_state = FsmState.NORMAL
                 logger.info("FSM iniciada en estado NORMAL.")
@@ -119,34 +130,115 @@ class V2Orchestrator:
             self.fsm.current_state = FsmState.NORMAL
             logger.info("Base de datos limpia: FSM iniciada en estado NORMAL.")
 
-    async def _l2_worker_loop(self) -> None:
-        """Worker en segundo plano para L2 con candado de concurrencia e aislamiento de excepciones."""
-        logger.info("V2 Orquestador: Worker de disparo L2 iniciado.")
-        while True:
-            await self.l2_trigger_event.wait()
-            self.l2_trigger_event.clear()
+    def _build_readings_summary(self, ref_time: datetime, discrepancy: Optional[str] = None) -> dict:
+        """Construye un resumen estandarizado de lecturas para auditoría FSM."""
+        return {
+            "l0": {
+                "reachable": self.latest_l0.is_reachable if self.latest_l0 else None,
+                "latency_ms": self.latest_l0.latency_ms if self.latest_l0 else None,
+                "loss_pct": self.latest_l0.packet_loss_pct if self.latest_l0 else None,
+            },
+            "l1": {
+                "throughput_mbps": self.latest_l1.throughput_mbps if self.latest_l1 else None,
+                "baseline_mbps": self.latest_l1.baseline_mbps if self.latest_l1 else None,
+                "degraded": self.latest_l1.is_degraded if self.latest_l1 else None,
+                "valid": self.latest_l1.is_valid if self.latest_l1 else None,
+                "bytes_downloaded": getattr(self.latest_l1, "bytes_downloaded", None) if self.latest_l1 else None,
+            },
+            "fast": {
+                "throughput_mbps": self.latest_fast.throughput_mbps if self.latest_fast else None,
+                "baseline_mbps": self.latest_fast.baseline_mbps if self.latest_fast else None,
+                "degraded": self.latest_fast.is_degraded if self.latest_fast else None,
+                "valid": self.latest_fast.is_valid if self.latest_fast else None,
+                "duration_ms": self.latest_fast.duration_ms if self.latest_fast else None,
+            } if self.latest_fast else None,
+            "l2": {
+                "download_mbps": self.latest_l2.download_mbps if self.latest_l2 else None,
+                "ping_ms": self.latest_l2.ping_ms if self.latest_l2 else None,
+            } if self.latest_l2 else None,
+            "fsm": {
+                "recovery_counter": self.fsm.recovery_counter,
+                "recovery_k": self.fsm.recovery_k,
+            },
+            "discrepancy": discrepancy,
+        }
 
-            if self.l2_is_running:
-                logger.warning("V2 Orquestador: Intento de disparo L2 omitido — ejecución anterior aún en curso.")
+    async def _confirmation_worker_loop(self) -> None:
+        """Worker en segundo plano para la secuencia de confirmación (Fast -> Ookla)."""
+        logger.info("V2 Orquestador: Worker de confirmación (Fast -> Ookla) iniciado.")
+        while True:
+            await self.confirmation_trigger_event.wait()
+            self.confirmation_trigger_event.clear()
+
+            if self.confirmation_is_running:
+                logger.warning("V2 Orquestador: Secuencia de confirmación omitida — ejecución anterior en curso.")
                 continue
 
             try:
-                self.l2_is_running = True
-                logger.info("V2 Orquestador: Ejecutando Sensor L2 (Ookla Speedtest)...")
-                l2_reading = await self.l2_sensor.measure()
+                self.confirmation_is_running = True
+                logger.info("V2 Orquestador: Iniciando etapa intermedia Fast.com...")
 
-                if l2_reading:
-                    self.latest_l2 = l2_reading
-                    self.repository.save_l2_reading(l2_reading)
+                # 1. Ejecutar Fast.com
+                fast_reading = await self.fast_sensor.measure()
+                if fast_reading:
+                    self.latest_fast = fast_reading
+                    fast_baseline = db.get_baseline_mbps_fast()
+                    fast_reading.baseline_mbps = fast_baseline
+                    self.repository.save_fast_reading(fast_reading)
 
-                    # Si seguimos en CONFIRMANDO, forzar un tick inmediato con la evidencia L2
+                # 2. Evaluar evidencia Fast con ConfirmationEngine
+                fast_outcome = self.confirmation_engine.evaluate_fast(
+                    fast_reading,
+                    fast_reading.baseline_mbps if fast_reading else None
+                )
+
+                if fast_outcome == ConfirmationOutcome.FAST_REJECT:
+                    logger.info("V2 Orquestador: Fast REJECT — Evidencia insuficiente para confirmar degradación. FSM retorna a NORMAL ('d'). NO se ejecuta Ookla.")
                     if self.fsm.current_state == FsmState.CONFIRMANDO:
-                        logger.info("V2 Orquestador: L2 finalizó exitosamente — ejecutando tick inmediato en CONFIRMANDO.")
-                        await self.tick()
+                        now = datetime.now(timezone.utc)
+                        summary = self._build_readings_summary(now, discrepancy="L1 anómalo, Fast saludable (no confirmación)")
+                        record = self.fsm.process_symbol(InputSymbol.D, timestamp=now, readings_json=summary)
+                        self.repository.save_fsm_transition(record)
+                        await self._handle_action(record.output_action, record.next_state, summary, now)
+                    continue
+
+                elif fast_outcome in (ConfirmationOutcome.FAST_CONFIRM, ConfirmationOutcome.CONFIRMATION_ERROR):
+                    if fast_outcome == ConfirmationOutcome.CONFIRMATION_ERROR:
+                        logger.warning("V2 Orquestador: Fast finalizó con ERROR — Procediendo defensivamente a Ookla para verificación.")
+                    else:
+                        logger.info("V2 Orquestador: Fast CONFIRM — Condición compatible con degradación. Procediendo a prueba pesada Ookla (L2).")
+
+                    # 3. Ejecutar Ookla Speedtest (L2)
+                    l2_reading = await self.l2_sensor.measure()
+                    if l2_reading:
+                        self.latest_l2 = l2_reading
+                        self.repository.save_l2_reading(l2_reading)
+
+                        ookla_baseline = db.get_baseline_mbps_oficial()
+                        ookla_outcome = self.confirmation_engine.evaluate_ookla(
+                            l2_reading,
+                            ookla_baseline
+                        )
+
+                        if self.fsm.current_state == FsmState.CONFIRMANDO:
+                            now = datetime.now(timezone.utc)
+                            if ookla_outcome == ConfirmationOutcome.OOKLA_CONFIRM:
+                                logger.info("V2 Orquestador: Ookla CONFIRM — Transicionando FSM a EVENTO ('cd').")
+                                summary = self._build_readings_summary(now)
+                                record = self.fsm.process_symbol(InputSymbol.CD, timestamp=now, readings_json=summary)
+                                self.repository.save_fsm_transition(record)
+                                await self._handle_action(record.output_action, record.next_state, summary, now)
+                            else:
+                                logger.info("V2 Orquestador: Ookla REJECT — FSM retorna a NORMAL ('d'). Discrepancia registrada.")
+                                summary = self._build_readings_summary(now, discrepancy="L1/Fast anómalos, Ookla saludable (no confirmación)")
+                                record = self.fsm.process_symbol(InputSymbol.D, timestamp=now, readings_json=summary)
+                                self.repository.save_fsm_transition(record)
+                                await self._handle_action(record.output_action, record.next_state, summary, now)
+
             except Exception as e:
-                logger.error("Error no controlado en worker L2: %s", e, exc_info=True)
+                logger.error("Error no controlado en worker de confirmación: %s", e, exc_info=True)
             finally:
-                self.l2_is_running = False
+                self.confirmation_is_running = False
 
     async def tick(self, now: Optional[datetime] = None) -> None:
         """Ejecuta una iteración de muestreo con aislamiento de fallas entre sensores."""
@@ -192,28 +284,7 @@ class V2Orchestrator:
             logger.info("V2 Orquestador: Sin evidencia suficiente para emitir símbolo FSM. Tick omitido.")
             return
 
-        readings_summary = {
-            "l0": {
-                "reachable": l0_reading.is_reachable if l0_reading else None,
-                "latency_ms": l0_reading.latency_ms if l0_reading else None,
-                "loss_pct": l0_reading.packet_loss_pct if l0_reading else None,
-            },
-            "l1": {
-                "throughput_mbps": l1_reading.throughput_mbps if l1_reading else None,
-                "baseline_mbps": l1_reading.baseline_mbps if l1_reading else None,
-                "degraded": l1_reading.is_degraded if l1_reading else None,
-                "valid": l1_reading.is_valid if l1_reading else None,
-                "bytes_downloaded": getattr(l1_reading, "bytes_downloaded", None) if l1_reading else None,
-            },
-            "l2": {
-                "download_mbps": self.latest_l2.download_mbps if self.latest_l2 else None,
-                "ping_ms": self.latest_l2.ping_ms if self.latest_l2 else None,
-            } if self.latest_l2 else None,
-            "fsm": {
-                "recovery_counter": self.fsm.recovery_counter,
-                "recovery_k": self.fsm.recovery_k,
-            },
-        }
+        readings_summary = self._build_readings_summary(ref_time)
 
         # 4. Procesar símbolo en FSM Mealy
         record = self.fsm.process_symbol(symbol, timestamp=ref_time, readings_json=readings_summary)
@@ -221,10 +292,10 @@ class V2Orchestrator:
         # Guardar registro de transición en la base de datos a través del repositorio
         self.repository.save_fsm_transition(record)
 
-        # Disparar L2 únicamente en la transición de entrada a CONFIRMANDO
+        # Disparar secuencia de confirmación únicamente al entrar en CONFIRMANDO
         if old_state_val != FsmState.CONFIRMANDO and record.next_state == FsmState.CONFIRMANDO:
-            logger.info("V2 Orquestador: Transición a CONFIRMANDO detectada — activando disparo L2.")
-            self.l2_trigger_event.set()
+            logger.info("V2 Orquestador: Transición a CONFIRMANDO detectada — activando secuencia de confirmación (Fast -> Ookla).")
+            self.confirmation_trigger_event.set()
 
         # 5. Manejar Acciones de Salida (OutputAction)
         await self._handle_action(record.output_action, record.next_state, readings_summary, ref_time)
@@ -298,8 +369,8 @@ class V2Orchestrator:
         # Restaurar estado FSM desde la base de datos antes de iniciar el ciclo
         self.restore_state()
 
-        # Lanzar worker de disparo L2
-        asyncio.create_task(self._l2_worker_loop())
+        # Lanzar worker de confirmación (Fast -> Ookla)
+        asyncio.create_task(self._confirmation_worker_loop())
 
         while True:
             try:

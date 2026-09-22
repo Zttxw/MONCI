@@ -117,6 +117,19 @@ CREATE TABLE IF NOT EXISTS v2_l2_readings (
     server_name TEXT
 );
 
+CREATE TABLE IF NOT EXISTS v2_fast_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME NOT NULL,
+    throughput_mbps REAL NOT NULL,
+    duration_ms REAL NOT NULL,
+    bytes_downloaded INTEGER NOT NULL,
+    baseline_mbps REAL,
+    is_degraded BOOLEAN NOT NULL,
+    is_valid BOOLEAN NOT NULL,
+    server_name TEXT,
+    error TEXT
+);
+
 CREATE TABLE IF NOT EXISTS v2_fsm_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp DATETIME NOT NULL,
@@ -685,6 +698,62 @@ def insert_v2_l2_reading(
                 server_name,
             ),
         )
+
+
+def insert_v2_fast_reading(
+    timestamp: datetime,
+    throughput_mbps: float,
+    duration_ms: float,
+    bytes_downloaded: int,
+    baseline_mbps: Optional[float] = None,
+    is_degraded: bool = False,
+    is_valid: bool = True,
+    server_name: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Inserta una lectura del Sensor Fast.com (Infraestructura de Medición de Netflix)."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO v2_fast_readings "
+            "(timestamp, throughput_mbps, duration_ms, bytes_downloaded, baseline_mbps, "
+            "is_degraded, is_valid, server_name, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                timestamp.isoformat(),
+                throughput_mbps,
+                duration_ms,
+                bytes_downloaded,
+                baseline_mbps,
+                1 if is_degraded else 0,
+                1 if is_valid else 0,
+                server_name,
+                error,
+            ),
+        )
+
+
+def get_baseline_mbps_fast(limit: int = 20, min_count: Optional[int] = None) -> float:
+    """Calcula el baseline de Fast usando la MEDIANA sobre las últimas 'limit' mediciones sanas.
+    Si el número de lecturas sanas es menor que 'FAST_MIN_BASELINE_SAMPLES', retorna FAST_DEFAULT_BASELINE_MBPS.
+    """
+    from config import FAST_DEFAULT_BASELINE_MBPS, FAST_MIN_BASELINE_SAMPLES
+    target_min = min_count if min_count is not None else FAST_MIN_BASELINE_SAMPLES
+    with get_connection() as conn:
+        v2_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_fast_readings'"
+        ).fetchone()
+        if v2_check:
+            rows = conn.execute(
+                "SELECT throughput_mbps FROM v2_fast_readings "
+                "WHERE (is_valid = 1 OR is_valid IS NULL) "
+                "AND throughput_mbps > 0 "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            if len(rows) >= target_min:
+                vals = [r["throughput_mbps"] for r in rows]
+                return float(statistics.median(vals))
+    return float(FAST_DEFAULT_BASELINE_MBPS)
 
 
 def insert_v2_fsm_transition(

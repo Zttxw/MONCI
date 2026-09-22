@@ -284,3 +284,30 @@ Antes de aprobar cualquier PR/commit, verificar:
 - [ ] Reporte PDF excluye/marca aparte cierres por `cambio_destino`
 - [ ] Pruebas de verificación manual/scripts ad-hoc deben usar tablas separadas o etiquetar datos con `origen='test'` para prevenir el borrado accidental de datos reales de producción mediante filtros genéricos.
 
+
+## Arquitectura V2 — Motor de Detección Mealy FSM y Evidencia Intermedia (Fast.com)
+
+El motor V2 desacopla la captura de sensores, la evaluación de evidencia y la máquina de estados Mealy FSM:
+
+### 1. Sensores Pasivos
+- **L0 (Conectividad / Alcance)**: Medición continua de disponibilidad de red.
+- **L1 (Micro-throughput Cloudflare)**: Detección continua de rendimiento de 1.0s vía PycURL multi-stream.
+- **Fast (Fast.com / Infraestructura de medición de Netflix)**: Etapa intermedia de confirmación rápida (4.4s, 75MB) sobre PycURL.
+- **L2 (Ookla Speedtest)**: Confirmación pesada/final bajo demanda (23.3s, 706MB).
+
+### 2. FSM Mealy V2 (Intacta - 4 Estados)
+- **Estados**: `NORMAL`, `SOSPECHA`, `CONFIRMANDO`, `EVENTO`.
+- **Símbolos**: `n` (saludable), `a` (anomalía L1), `co` (caída total L0), `cd` (degradación confirmada Ookla), `d` (descarte/evidencia insuficiente).
+
+### 3. Evidence / Confirmation Engine
+- Desacoplado de la FSM. Evalúa evidencias intermedias y pesadas retornando un `ConfirmationOutcome` (`FAST_REJECT`, `FAST_CONFIRM`, `OOKLA_REJECT`, `OOKLA_CONFIRM`, `CONFIRMATION_ERROR`, `MEASUREMENT_DISCREPANCY`).
+- El `V2Orchestrator` transforma el `ConfirmationOutcome` en el símbolo de entrada FSM correspondiente.
+
+### 4. Flujo Decisional de Confirmación
+$$\text{L0/L1} \xrightarrow{\text{anomalía}} \text{SOSPECHA} \xrightarrow{\text{persistencia}} \text{CONFIRMANDO} \xrightarrow{\text{Fast}} \begin{cases} \text{FAST\_REJECT} \rightarrow d \rightarrow \text{NORMAL (Ookla = 0)} \\ \text{FAST\_CONFIRM} \rightarrow \text{Ookla} \rightarrow \begin{cases} \text{OOKLA\_CONFIRM} \rightarrow cd \rightarrow \text{EVENTO} \\ \text{OOKLA\_REJECT} \rightarrow d \rightarrow \text{NORMAL} \end{cases} \end{cases}$$
+
+- **Bypass de Caída Total L0**: Salta directamente a `EVENTO` mediante el símbolo `co`, omitiendo Fast y Ookla ($0$ ejecuciones).
+- **Protección de Baseline Fast**: `FAST_MIN_BASELINE_SAMPLES = 5` requeridas antes de usar el baseline calculado. Usa `FAST_DEFAULT_BASELINE_MBPS = 250.0` durante el arranque.
+- **Registro de Discrepancias**: Todas las divergencias metodológicas entre sensores se persisten para auditoría sin asumir causalidad errónea.
+
+

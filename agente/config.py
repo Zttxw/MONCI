@@ -83,3 +83,12 @@ L1_URL = os.getenv("L1_URL", f"https://speed.cloudflare.com/__down?bytes={_L1_DE
 L2_OUTAGE_THRESHOLD_PERCENT = float(os.getenv("L2_OUTAGE_THRESHOLD_PERCENT", "10.0"))
 L2_DEGRADATION_THRESHOLD_PERCENT = float(os.getenv("L2_DEGRADATION_THRESHOLD_PERCENT", "50.0"))
 
+# --- Fast.com Sensor & Evidence Engine (etapa intermedia de confirmación) ---
+FAST_ENABLED = os.getenv("FAST_ENABLED", "True").lower() in ("true", "1", "yes")
+FAST_TARGET_COUNT = int(os.getenv("FAST_TARGET_COUNT", "3"))
+FAST_TIMEOUT_SECONDS = int(os.getenv("FAST_TIMEOUT_SECONDS", "10"))
+FAST_DEFAULT_BASELINE_MBPS = float(os.getenv("FAST_DEFAULT_BASELINE_MBPS", "250.0"))
+FAST_MIN_BASELINE_SAMPLES = int(os.getenv("FAST_MIN_BASELINE_SAMPLES", "5"))
+FAST_DEGRADATION_THRESHOLD_PCT = float(os.getenv("FAST_DEGRADATION_THRESHOLD_PCT", "0.50"))
+
+

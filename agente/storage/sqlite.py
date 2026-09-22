@@ -13,6 +13,7 @@ from engine.models import (
     L0Reading,
     L1Reading,
     L2Reading,
+    FastReading,
     TransitionRecord,
 )
 from storage.base import V2Repository
@@ -66,6 +67,21 @@ class SQLiteV2Repository(V2Repository):
             baseline_mbps=reading.baseline_mbps,
             server_id=reading.server_id,
             server_name=reading.server_name,
+        )
+
+    def save_fast_reading(self, reading: Optional[FastReading]) -> None:
+        if reading is None:
+            return
+        db.insert_v2_fast_reading(
+            timestamp=reading.timestamp,
+            throughput_mbps=reading.throughput_mbps,
+            duration_ms=reading.duration_ms,
+            bytes_downloaded=reading.bytes_downloaded,
+            baseline_mbps=reading.baseline_mbps,
+            is_degraded=reading.is_degraded,
+            is_valid=reading.is_valid,
+            server_name=reading.server_name,
+            error=reading.error,
         )
 
     def save_fsm_transition(self, record: TransitionRecord) -> None:

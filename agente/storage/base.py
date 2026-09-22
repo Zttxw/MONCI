@@ -12,6 +12,7 @@ from engine.models import (
     L0Reading,
     L1Reading,
     L2Reading,
+    FastReading,
     TransitionRecord,
 )
 
@@ -32,6 +33,11 @@ class V2Repository(ABC):
     @abstractmethod
     def save_l2_reading(self, reading: L2Reading) -> None:
         """Persiste una lectura del Sensor L2."""
+        pass
+
+    @abstractmethod
+    def save_fast_reading(self, reading: Optional[FastReading]) -> None:
+        """Persiste una lectura del Sensor Fast.com."""
         pass
 
     @abstractmethod
