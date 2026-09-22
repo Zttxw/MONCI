@@ -26,50 +26,49 @@ def _get_destinos_monitoreados() -> list[str]:
 
 
 def _get_estado_destinos() -> list[EstadoDestino]:
-    """Determina el estado actual de cada destino basado en eventos abiertos."""
+    """Determina el estado actual de cada destino basado en V2 L0 y eventos V2."""
     estados = []
     gateway_ip = get_metadata("gateway_ip")
     isp_hop_ip = get_metadata("isp_hop")
     destinos = _get_destinos_monitoreados()
 
     with get_connection() as conn:
-        for destino in destinos:
-            if destino == "gateway":
-                search_destinos = ["gateway"]
-                if gateway_ip:
-                    search_destinos.append(gateway_ip)
-            elif destino == "isp_hop":
-                search_destinos = [isp_hop_ip] if isp_hop_ip else []
-            else:
-                search_destinos = [destino]
+        # 1. Intentar V2 L0
+        v2_l0_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l0_readings'"
+        ).fetchone()
+        if v2_l0_check:
+            row_l0 = conn.execute("SELECT * FROM v2_l0_readings ORDER BY timestamp DESC LIMIT 1").fetchone()
+            if row_l0:
+                is_up = bool(row_l0["is_reachable"])
+                ts = row_l0["timestamp"]
+                for d in destinos:
+                    estados.append(EstadoDestino(destino=d, estado="UP" if is_up else "DOWN", desde=ts))
+                return estados
 
-            if not search_destinos:
-                continue
+        # 2. Fallback a V1
+        for destino in destinos:
+            search_destinos = [destino]
+            if destino == "gateway" and gateway_ip:
+                search_destinos.append(gateway_ip)
+            elif destino == "isp_hop" and isp_hop_ip:
+                search_destinos = [isp_hop_ip]
 
             placeholders = ",".join("?" for _ in search_destinos)
             row = conn.execute(
-                f"SELECT inicio FROM eventos_caida "
-                f"WHERE destino IN ({placeholders}) AND fin IS NULL "
-                f"ORDER BY inicio DESC LIMIT 1",
+                f"SELECT inicio FROM eventos_caida WHERE destino IN ({placeholders}) AND fin IS NULL ORDER BY inicio DESC LIMIT 1",
                 search_destinos,
             ).fetchone()
 
             if row:
-                estados.append(EstadoDestino(
-                    destino=destino, estado="DOWN", desde=row["inicio"]
-                ))
+                estados.append(EstadoDestino(destino=destino, estado="DOWN", desde=row["inicio"]))
             else:
                 last = conn.execute(
-                    f"SELECT fin FROM eventos_caida "
-                    f"WHERE destino IN ({placeholders}) AND fin IS NOT NULL "
-                    f"ORDER BY fin DESC LIMIT 1",
+                    f"SELECT fin FROM eventos_caida WHERE destino IN ({placeholders}) AND fin IS NOT NULL ORDER BY fin DESC LIMIT 1",
                     search_destinos,
                 ).fetchone()
-
                 desde = last["fin"] if last else None
-                estados.append(EstadoDestino(
-                    destino=destino, estado="UP", desde=desde
-                ))
+                estados.append(EstadoDestino(destino=destino, estado="UP", desde=desde))
 
     return estados
 
@@ -77,6 +76,30 @@ def _get_estado_destinos() -> list[EstadoDestino]:
 def _get_estado_dns() -> EstadoDNS | None:
     """Determina el estado actual de la resolución DNS."""
     with get_connection() as conn:
+        # Verificar V2 L0 sub-checks primero
+        v2_l0_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l0_readings'"
+        ).fetchone()
+        if v2_l0_check:
+            row_l0 = conn.execute("SELECT * FROM v2_l0_readings ORDER BY timestamp DESC LIMIT 1").fetchone()
+            if row_l0:
+                sub_checks = row_l0.get("sub_checks")
+                is_dns_ok = True
+                if sub_checks:
+                    import json
+                    try:
+                        sc = json.loads(sub_checks) if isinstance(sub_checks, str) else sub_checks
+                        if "dns_google.com" in sc:
+                            is_dns_ok = sc["dns_google.com"].get("ok", True)
+                    except Exception:
+                        pass
+                return EstadoDNS(
+                    dominio="google.com",
+                    servidor_dns="8.8.8.8",
+                    estado="UP" if is_dns_ok else "DOWN",
+                    desde=row_l0["timestamp"],
+                )
+
         table_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='eventos_dns'"
         ).fetchone()
@@ -84,8 +107,7 @@ def _get_estado_dns() -> EstadoDNS | None:
             return None
 
         row = conn.execute(
-            "SELECT dominio, servidor_dns, inicio FROM eventos_dns "
-            "WHERE fin IS NULL ORDER BY inicio DESC LIMIT 1"
+            "SELECT dominio, servidor_dns, inicio FROM eventos_dns WHERE fin IS NULL ORDER BY inicio DESC LIMIT 1"
         ).fetchone()
 
         if row:
@@ -97,8 +119,7 @@ def _get_estado_dns() -> EstadoDNS | None:
             )
 
         last = conn.execute(
-            "SELECT dominio, servidor_dns, fin FROM eventos_dns "
-            "WHERE fin IS NOT NULL ORDER BY fin DESC LIMIT 1"
+            "SELECT dominio, servidor_dns, fin FROM eventos_dns WHERE fin IS NOT NULL ORDER BY fin DESC LIMIT 1"
         ).fetchone()
 
         if last:
@@ -120,9 +141,24 @@ def _get_estado_dns() -> EstadoDNS | None:
 def _get_ultima_velocidad() -> MedicionVelocidad | None:
     """Obtiene la última medición de velocidad oficial (Ookla)."""
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM mediciones_velocidad ORDER BY timestamp DESC LIMIT 1"
+        # V2 L2
+        v2_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l2_readings'"
         ).fetchone()
+        if v2_check:
+            row_v2 = conn.execute("SELECT * FROM v2_l2_readings ORDER BY timestamp DESC LIMIT 1").fetchone()
+            if row_v2:
+                return MedicionVelocidad(
+                    id=row_v2["id"],
+                    timestamp=row_v2["timestamp"],
+                    descarga_mbps=row_v2["download_mbps"],
+                    subida_mbps=row_v2["upload_mbps"],
+                    ping_ms=row_v2["ping_ms"],
+                    latencia_bajo_carga_ms=row_v2["loaded_latency_ms"],
+                )
+
+        # Fallback V1
+        row = conn.execute("SELECT * FROM mediciones_velocidad ORDER BY timestamp DESC LIMIT 1").fetchone()
         if row:
             return MedicionVelocidad(**dict(row))
     return None
@@ -131,34 +167,70 @@ def _get_ultima_velocidad() -> MedicionVelocidad | None:
 def _get_ultimo_probe_liviano() -> MedicionProbeLiviano | None:
     """Obtiene la última medición del probe liviano de velocidad."""
     with get_connection() as conn:
+        # V2 L1
+        v2_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l1_readings'"
+        ).fetchone()
+        if v2_check:
+            row_v2 = conn.execute("SELECT * FROM v2_l1_readings ORDER BY timestamp DESC LIMIT 1").fetchone()
+            if row_v2:
+                return MedicionProbeLiviano(
+                    id=row_v2["id"],
+                    timestamp=row_v2["timestamp"],
+                    mbps_aproximado=row_v2["throughput_mbps"],
+                    tiempo_respuesta_ms=row_v2["total_time_ms"],
+                    servidor="Cloudflare CDN",
+                    dns_ms=row_v2["dns_ms"],
+                    tcp_connect_ms=row_v2["tcp_ms"],
+                    tls_ms=row_v2["tls_ms"],
+                    ttfb_ms=row_v2["ttfb_ms"],
+                    transfer_ms=row_v2["transfer_ms"],
+                    mbps_throughput=row_v2["throughput_mbps"],
+                    latencia_ms=row_v2["tcp_ms"],
+                    streams_usados=row_v2["streams_used"],
+                    muestra_valida=row_v2["is_valid"],
+                )
+
+        # Fallback V1
         table_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='mediciones_probe_liviano'"
         ).fetchone()
         if not table_check:
             return None
 
-        row = conn.execute(
-            "SELECT * FROM mediciones_probe_liviano ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
+        row = conn.execute("SELECT * FROM mediciones_probe_liviano ORDER BY timestamp DESC LIMIT 1").fetchone()
         if row:
             return MedicionProbeLiviano(**dict(row))
     return None
 
 
 def _get_probe_liviano_stats() -> tuple[int, float | None]:
-    """Retorna (count, baseline_mbps) del probe liviano."""
+    """Retorna (count, baseline_mbps) del probe liviano V2/V1."""
     with get_connection() as conn:
+        v2_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l1_readings'"
+        ).fetchone()
+        if v2_check:
+            count = conn.execute("SELECT COUNT(*) FROM v2_l1_readings").fetchone()[0]
+            rows = conn.execute(
+                "SELECT throughput_mbps FROM v2_l1_readings WHERE (is_valid = 1 OR is_valid IS NULL) AND throughput_mbps > 0 ORDER BY timestamp DESC LIMIT 20"
+            ).fetchall()
+            if len(rows) >= 5:
+                import statistics
+                vals = [r["throughput_mbps"] for r in rows]
+                return count, statistics.median(vals)
+
         table_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='mediciones_probe_liviano'"
         ).fetchone()
         if not table_check:
             return 0, None
         count = conn.execute("SELECT COUNT(*) FROM mediciones_probe_liviano").fetchone()[0]
-        if count < 20:
+        if count < 5:
             return count, None
-        rows = conn.execute(
-            "SELECT mbps_aproximado FROM mediciones_probe_liviano ORDER BY timestamp DESC LIMIT 20"
-        ).fetchall()
+        rows = conn.execute("SELECT mbps_aproximado FROM mediciones_probe_liviano ORDER BY timestamp DESC LIMIT 20").fetchall()
+        if not rows:
+            return count, None
         avg = sum(r["mbps_aproximado"] for r in rows) / len(rows)
         return count, avg
 
@@ -680,7 +752,18 @@ function renderTopAndCards(data) {
   const heroHeadline = document.getElementById('heroHeadline');
   const heroSub = document.getElementById('heroSub');
 
-  const speedVal = data.ultima_velocidad ? data.ultima_velocidad.descarga_mbps : null;
+  // Evaluaciones de Frescura
+  const FRESHNESS_L1_MAX_SEC = 180;    // Probe continuo L1 (3 minutos)
+  const FRESHNESS_L2_MAX_SEC = 86400;  // Test oficial Ookla L2 (24 horas)
+
+  const isL1Fresh = data.ultimo_probe_liviano && data.ultimo_probe_liviano.timestamp &&
+    (Math.floor((Date.now() - new Date(data.ultimo_probe_liviano.timestamp).getTime()) / 1000) <= FRESHNESS_L1_MAX_SEC);
+
+  const isL2Fresh = data.ultima_velocidad && data.ultima_velocidad.timestamp &&
+    (Math.floor((Date.now() - new Date(data.ultima_velocidad.timestamp).getTime()) / 1000) <= FRESHNESS_L2_MAX_SEC);
+
+  // Valor de velocidad para el Hero Banner (priorizar L1 fresco, sino L2 fresco)
+  const speedVal = isL1Fresh ? data.ultimo_probe_liviano.mbps_aproximado : (isL2Fresh ? data.ultima_velocidad.descarga_mbps : null);
 
   if (caidasActivas.length > 0) {
     topPill.className = 'status-pill down';
@@ -692,14 +775,14 @@ function renderTopAndCards(data) {
     heroBadge.textContent = '🔴';
     heroHeadline.textContent = 'SIN INTERNET — CAÍDA TOTAL EN CURSO';
     heroSub.textContent = `La conexión hacia ${firstDown.destino} está interrumpida desde las ${formatTimeShort(firstDown.desde)} (${durStr}).`;
-  } else if (speedVal && speedVal < 300) {
+  } else if (isL1Fresh && data.ultimo_probe_liviano.mbps_aproximado < 100) {
     topPill.className = 'status-pill';
-    topText.textContent = 'Lentitud Severa';
+    topText.textContent = 'Lentitud Detectada';
 
     heroBanner.className = 'hero-banner hero-warn';
     heroBadge.textContent = '🟡';
-    heroHeadline.textContent = `LENTITUD SEVERA — VELOCIDAD EN ${speedVal.toFixed(0)} Mbps`;
-    heroSub.textContent = `La velocidad cayó drásticamente a un ${(speedVal / 9.0).toFixed(0)}% del total contratado (900 Mbps).`;
+    heroHeadline.textContent = `LENTITUD EN CURSO — SONDA EN ${data.ultimo_probe_liviano.mbps_aproximado.toFixed(0)} Mbps`;
+    heroSub.textContent = `La sonda de monitoreo continuo registra velocidad reducida respecto al baseline.`;
   } else {
     topPill.className = 'status-pill';
     topText.textContent = 'Sin alertas';
@@ -708,7 +791,7 @@ function renderTopAndCards(data) {
     heroBadge.textContent = '🟢';
     const mbpsText = speedVal ? `${speedVal.toFixed(0)} Mbps` : 'OPERATIVO';
     heroHeadline.textContent = `INTERNET OK — VELOCIDAD EN ${mbpsText}`;
-    heroSub.textContent = 'La conexión de la oficina funciona a la velocidad contratada sin interrupciones activas.';
+    heroSub.textContent = 'La conexión de la oficina funciona con normalidad sin interrupciones ni degradaciones activas.';
   }
 
   // Stat Card 1: Latencia
@@ -723,14 +806,17 @@ function renderTopAndCards(data) {
   if (data.ultima_velocidad && data.ultima_velocidad.descarga_mbps) {
     document.getElementById('statSpeedOfficial').textContent = data.ultima_velocidad.descarga_mbps.toFixed(0);
     const timeAgo = formatTimeAgo(data.ultima_velocidad.timestamp);
-    document.getElementById('statSpeedTime').textContent = `Ookla · multihilo · ${timeAgo}`;
+    const staleLabel = isL2Fresh ? '' : ' ⚠️ (datos antiguos)';
+    document.getElementById('statSpeedTime').textContent = `Ookla · multihilo · ${timeAgo}${staleLabel}`;
   }
 
-  // Stat Card 3: Sonda Continua (NDT7)
+  // Stat Card 3: Sonda Continua (PycURL)
   if (data.ultimo_probe_liviano) {
     document.getElementById('statSpeedLight').textContent = data.ultimo_probe_liviano.mbps_aproximado.toFixed(1);
     const serverName = data.ultimo_probe_liviano.servidor ? data.ultimo_probe_liviano.servidor : 'Cloudflare CDN';
-    document.getElementById('statLightServer').textContent = `Sonda HTTP PycURL · ${serverName}`;
+    const timeAgoL1 = formatTimeAgo(data.ultimo_probe_liviano.timestamp);
+    const staleL1Label = isL1Fresh ? ` · ${timeAgoL1}` : ' ⚠️ (obsoleto)';
+    document.getElementById('statLightServer').textContent = `Sonda PycURL · ${serverName}${staleL1Label}`;
   }
 
   // Stat Card 4: Ruta

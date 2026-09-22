@@ -80,3 +80,65 @@ async def get_readings(
             f"SELECT * FROM {table_name} ORDER BY timestamp DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+@router.get("/diagnostic")
+async def get_diagnostic():
+    """Ejecuta una inspección de diagnóstico del estado actual (CURRENT STATE DIAGNOSTIC)."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    with get_connection() as conn:
+        last_l1 = conn.execute("SELECT * FROM v2_l1_readings ORDER BY timestamp DESC LIMIT 1").fetchone()
+        last_l2 = conn.execute("SELECT * FROM v2_l2_readings ORDER BY timestamp DESC LIMIT 1").fetchone()
+        active_events = conn.execute("SELECT * FROM v2_events WHERE is_active = 1").fetchall()
+        all_v2_events = conn.execute("SELECT * FROM v2_events ORDER BY start_time DESC LIMIT 10").fetchall()
+
+    l1_dict = dict(last_l1) if last_l1 else None
+    l2_dict = dict(last_l2) if last_l2 else None
+
+    # Frescura L1 (180s)
+    l1_age = None
+    l1_fresh = False
+    if l1_dict and l1_dict.get("timestamp"):
+        try:
+            ts_l1 = datetime.fromisoformat(l1_dict["timestamp"])
+            l1_age = (now - ts_l1).total_seconds()
+            l1_fresh = l1_age <= 180
+        except Exception:
+            pass
+
+    # Frescura L2 (86400s / 24h)
+    l2_age = None
+    l2_fresh = False
+    if l2_dict and l2_dict.get("timestamp"):
+        try:
+            ts_l2 = datetime.fromisoformat(l2_dict["timestamp"])
+            l2_age = (now - ts_l2).total_seconds()
+            l2_fresh = l2_age <= 86400
+        except Exception:
+            pass
+
+    return {
+        "title": "CURRENT STATE DIAGNOSTIC",
+        "now": now_iso,
+        "latest_l1": {
+            "timestamp": l1_dict.get("timestamp") if l1_dict else None,
+            "throughput_mbps": l1_dict.get("throughput_mbps") if l1_dict else None,
+            "baseline_mbps": l1_dict.get("baseline_mbps") if l1_dict else None,
+            "is_fresh": l1_fresh,
+            "age_seconds": round(l1_age, 1) if l1_age is not None else None,
+        },
+        "latest_official_l2": {
+            "timestamp": l2_dict.get("timestamp") if l2_dict else None,
+            "download_mbps": l2_dict.get("download_mbps") if l2_dict else None,
+            "baseline_mbps": l2_dict.get("baseline_mbps") if l2_dict else None,
+            "is_fresh": l2_fresh,
+            "age_seconds": round(l2_age, 1) if l2_age is not None else None,
+        },
+        "active_v2_events": [dict(e) for e in active_events],
+        "recent_v2_events": [dict(e) for e in all_v2_events],
+        "dashboard_status_source": "v2_l1_readings & v2_l0_readings & v2_fsm_history",
+        "dashboard_baseline_source": "v2_l1_readings (median of last 20 fresh readings)",
+    }
