@@ -1036,6 +1036,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   let currentView = 'dashboard';
   let timelineChartObj = null;
 
+  function formatLocalTime(isoStr) {
+    if (!isoStr) return '--:--:--';
+    try {
+      let clean = String(isoStr).replace(' ', 'T');
+      if (!clean.includes('Z') && !clean.includes('+') && !clean.includes('-', 10)) {
+        clean += 'Z';
+      }
+      const d = new Date(clean);
+      if (isNaN(d.getTime())) return isoStr;
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    } catch (e) {
+      return isoStr;
+    }
+  }
+
+  function formatLocalDateTime(isoStr) {
+    if (!isoStr) return '--:--:--';
+    try {
+      let clean = String(isoStr).replace(' ', 'T');
+      if (!clean.includes('Z') && !clean.includes('+') && !clean.includes('-', 10)) {
+        clean += 'Z';
+      }
+      const d = new Date(clean);
+      if (isNaN(d.getTime())) return isoStr;
+      return d.toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    } catch (e) {
+      return isoStr;
+    }
+  }
+
   function switchView(viewName, element) {
     currentView = viewName;
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -1065,7 +1095,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const data = await res.json();
       
       const now = new Date();
-      document.getElementById('sync-time').textContent = 'SYNC: ' + now.toTimeString().split(' ')[0];
+      document.getElementById('sync-time').textContent = 'SYNC: ' + now.toLocaleTimeString([], { hour12: false });
 
       // Banner & State
       const state = data.current_state || 'NORMAL';
@@ -1086,7 +1116,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const l1 = data.latest_readings.l1;
       if (l1) {
         document.getElementById('dash-l1-val').textContent = l1.throughput_mbps.toFixed(1) + ' Mbps';
-        document.getElementById('banner-last-ts').textContent = (l1.timestamp || '').split('T')[1]?.split('.')[0] || '--:--:--';
+        document.getElementById('banner-last-ts').textContent = formatLocalTime(l1.timestamp);
       }
 
       // FSM Nodes highlight
@@ -1119,7 +1149,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       history.forEach(row => {
         const tr = document.createElement('tr');
-        const time = (row.timestamp || '').split('T')[1]?.split('.')[0] || '';
+        const time = formatLocalTime(row.timestamp);
         const symbolTag = `<span class="badge-tag tag-blue">${row.input_symbol}</span>`;
         
         tr.innerHTML = `
@@ -1141,9 +1171,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const res = await fetch('/api/v2/sensors-status');
       const data = await res.json();
 
+      if (data.l0 && data.l0.last_reading) {
+        document.getElementById('sen-l0-ts').textContent = 'Ultima ejecucion: ' + formatLocalTime(data.l0.last_reading.timestamp);
+      }
+
       if (data.l1 && data.l1.last_reading) {
         document.getElementById('sen-l1-tp').textContent = data.l1.last_reading.throughput_mbps.toFixed(1) + ' Mbps';
         document.getElementById('sen-l1-int').textContent = data.l1.interval_seconds + ' s';
+        document.getElementById('sen-l1-ts').textContent = 'Ultima ejecucion: ' + formatLocalTime(data.l1.last_reading.timestamp);
       }
 
       const fast = data.fast;
@@ -1188,8 +1223,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const card = document.createElement('div');
       card.className = 'incident-card ' + (ev.end_time ? 'recovered' : '');
 
-      const start = (ev.start_time || '').replace('T', ' ').split('.')[0];
-      const end = ev.end_time ? ev.end_time.replace('T', ' ').split('.')[0] : 'EN CURSO';
+      const start = formatLocalDateTime(ev.start_time);
+      const end = ev.end_time ? formatLocalDateTime(ev.end_time) : 'EN CURSO';
       const dur = ev.duration_seconds ? ev.duration_seconds + ' s' : 'Observando';
 
       card.innerHTML = `
@@ -1238,7 +1273,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const ctx = document.getElementById('timelineChart').getContext('2d');
       if (timelineChartObj) timelineChartObj.destroy();
 
-      const labels = (data.l1 || []).map(r => (r.timestamp || '').split('T')[1]?.split('.')[0] || '');
+      const labels = (data.l1 || []).map(r => formatLocalTime(r.timestamp));
       const l1Vals = (data.l1 || []).map(r => r.throughput_mbps);
 
       timelineChartObj = new Chart(ctx, {
