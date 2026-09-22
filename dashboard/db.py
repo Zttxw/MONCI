@@ -114,3 +114,47 @@ def get_active_v2_event() -> dict | None:
     return None
 
 
+def get_v2_fast_readings(limit: int = 50) -> list[dict]:
+    """Obtiene los últimos N registros de la confirmación Fast.com (v2_fast_readings)."""
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_fast_readings ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_v2_timeline_data(limit: int = 150) -> dict:
+    """Obtiene datos consolidados para la Línea de Tiempo sincronizada V2."""
+    try:
+        with get_connection() as conn:
+            fsm_rows = conn.execute(
+                "SELECT * FROM v2_fsm_history ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
+            l1_rows = conn.execute(
+                "SELECT * FROM v2_l1_readings ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
+            fast_rows = conn.execute(
+                "SELECT * FROM v2_fast_readings ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
+            l2_rows = conn.execute(
+                "SELECT * FROM v2_l2_readings ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
+            events_rows = conn.execute(
+                "SELECT * FROM v2_events ORDER BY start_time DESC LIMIT ?", (limit,)
+            ).fetchall()
+
+            return {
+                "fsm": [dict(r) for r in reversed(fsm_rows)],
+                "l1": [dict(r) for r in reversed(l1_rows)],
+                "fast": [dict(r) for r in reversed(fast_rows)],
+                "l2": [dict(r) for r in reversed(l2_rows)],
+                "events": [dict(r) for r in events_rows],
+            }
+    except Exception as e:
+        logger.error("Error obteniendo datos de timeline: %s", e)
+        return {"fsm": [], "l1": [], "fast": [], "l2": [], "events": []}
+
+

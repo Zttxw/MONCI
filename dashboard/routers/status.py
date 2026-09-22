@@ -76,7 +76,6 @@ def _get_estado_destinos() -> list[EstadoDestino]:
 def _get_estado_dns() -> EstadoDNS | None:
     """Determina el estado actual de la resolución DNS."""
     with get_connection() as conn:
-        # Verificar V2 L0 sub-checks primero
         v2_l0_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l0_readings'"
         ).fetchone()
@@ -141,7 +140,6 @@ def _get_estado_dns() -> EstadoDNS | None:
 def _get_ultima_velocidad() -> MedicionVelocidad | None:
     """Obtiene la última medición de velocidad oficial (Ookla)."""
     with get_connection() as conn:
-        # V2 L2
         v2_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l2_readings'"
         ).fetchone()
@@ -157,7 +155,6 @@ def _get_ultima_velocidad() -> MedicionVelocidad | None:
                     latencia_bajo_carga_ms=row_v2["loaded_latency_ms"],
                 )
 
-        # Fallback V1
         row = conn.execute("SELECT * FROM mediciones_velocidad ORDER BY timestamp DESC LIMIT 1").fetchone()
         if row:
             return MedicionVelocidad(**dict(row))
@@ -167,7 +164,6 @@ def _get_ultima_velocidad() -> MedicionVelocidad | None:
 def _get_ultimo_probe_liviano() -> MedicionProbeLiviano | None:
     """Obtiene la última medición del probe liviano de velocidad."""
     with get_connection() as conn:
-        # V2 L1
         v2_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_l1_readings'"
         ).fetchone()
@@ -191,7 +187,6 @@ def _get_ultimo_probe_liviano() -> MedicionProbeLiviano | None:
                     muestra_valida=row_v2["is_valid"],
                 )
 
-        # Fallback V1
         table_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='mediciones_probe_liviano'"
         ).fetchone()
@@ -297,12 +292,12 @@ async def api_status():
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard_page():
-    """Dashboard visual completo."""
+    """Dashboard visual completo ControlInternet V2 (Ultraminimalista, 6 Vistas, 0 Emojis)."""
     return DASHBOARD_HTML
 
 
 # ---------------------------------------------------------------------------
-# Dashboard HTML — Híbrido Ejecutivo & Técnico (Líneas Limpias Sin Puntos)
+# Dashboard HTML SPA Ultraminimalista V2 (0 Emojis)
 # ---------------------------------------------------------------------------
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -310,1293 +305,991 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Control Internet</title>
+<title>CONTROLINTERNET V2 — Observacion & FSM Mealy</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
-  :root{
-    --bg:#F5F7F8;
-    --card:#FFFFFF;
-    --line:#E4E8EA;
-    --text:#1B2530;
-    --text-dim:#5E6B75;
-    --text-faint:#8F99A3;
-    --blue:#3484A5;
-    --blue-bg:#EAF2F5;
-    --green:#2CA792;
-    --green-bg:#E9F6F3;
-    --gold:#D97706;
-    --gold-bg:#FEF3C7;
-    --alert:#C2483C;
-    --alert-bg:#FBEAE8;
+  :root {
+    --bg-dark: #0B0E14;
+    --panel-bg: #131720;
+    --panel-border: #1F2633;
+    --text-primary: #E6EDF3;
+    --text-muted: #8B949E;
+    --text-faint: #484F58;
+    --color-normal: #2EA043;
+    --color-normal-bg: rgba(46, 160, 67, 0.12);
+    --color-sospecha: #D29922;
+    --color-sospecha-bg: rgba(210, 153, 34, 0.12);
+    --color-confirmando: #DB6D28;
+    --color-confirmando-bg: rgba(219, 109, 40, 0.12);
+    --color-evento: #F85149;
+    --color-evento-bg: rgba(248, 81, 73, 0.12);
+    --color-blue: #58A6FF;
+    --font-mono: 'IBM Plex Mono', monospace;
+    --font-sans: 'Public Sans', sans-serif;
   }
-  *{ box-sizing:border-box; margin:0; padding:0; }
-  body{
-    background:var(--bg); color:var(--text); font-family:'Public Sans', sans-serif;
-    line-height:1.5; padding:20px 24px 60px; -webkit-font-smoothing:antialiased;
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    line-height: 1.4;
+    height: 100vh;
+    overflow: hidden;
   }
-  .mono{ font-family:'IBM Plex Mono', monospace; }
-  .wrap{ max-width:1280px; margin:0 auto; }
 
-  /* Top bar */
-  .topbar{ display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:12px; }
-  .brand{ display:flex; align-items:center; gap:12px; }
-  .brand-icon{ width:36px; height:36px; border-radius:10px; background:var(--blue-bg); display:flex; align-items:center; justify-content:center; }
-  .brand h1{ font-size:17px; font-weight:800; letter-spacing:-0.02em; }
-  .brand-meta{ display:flex; align-items:center; gap:8px; margin-top:2px; }
-  .status-pill{
-    display:flex; align-items:center; gap:5px;
-    font-size:11px; font-weight:600; color:var(--green);
-    background:var(--green-bg); padding:2px 8px; border-radius:20px;
+  .app-container {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    height: 100vh;
   }
-  .status-pill.down{ color:var(--alert); background:var(--alert-bg); }
-  .status-dot{ width:6px; height:6px; border-radius:50%; background:var(--green); }
-  .status-pill.down .status-dot{ background:var(--alert); }
-  .brand-sub{ font-size:12px; color:var(--text-faint); }
-  .topbar-right{ text-align:right; font-size:11px; color:var(--text-faint); }
-
-  /* Executive Hero Traffic Light Banner */
-  .hero-banner{
-    border-radius:10px; padding:18px 24px; margin-bottom:16px; display:flex; align-items:center; gap:16px;
-    transition:all 0.3s ease; border:1.5px solid transparent; box-shadow:0 1px 3px rgba(0,0,0,0.02);
-  }
-  .hero-banner.hero-ok{ background:var(--green-bg); border-color:#BBE3DA; color:#0E5347; }
-  .hero-banner.hero-warn{ background:var(--gold-bg); border-color:#FCD34D; color:#78350F; }
-  .hero-banner.hero-alert{ background:var(--alert-bg); border-color:#FCA5A5; color:#7F1D1D; }
-
-  .hero-badge{ font-size:22px; }
-  .hero-content{ flex:1; }
-  .hero-headline{ font-size:18px; font-weight:800; letter-spacing:-0.01em; line-height:1.2; }
-  .hero-sub{ font-size:13px; font-weight:500; opacity:0.9; margin-top:2px; }
-
-  /* Stat cards */
-  .stats{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:16px; }
-  .stat-card{
-    background:var(--card); border:1px solid var(--line); border-left:3px solid var(--blue);
-    border-radius:8px; padding:14px 16px; display:flex; flex-direction:column; justify-content:space-between;
-  }
-  .stat-card.c-green{ border-left-color:var(--green); }
-  .stat-card.c-gold{ border-left-color:var(--gold); }
-  .stat-card.c-alert{ border-left-color:var(--alert); }
-  .stat-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
-  .stat-label{ font-size:10px; font-weight:700; color:var(--text-dim); letter-spacing:0.04em; text-transform:uppercase; }
-  .stat-icon{
-    width:24px; height:24px; border-radius:6px; background:var(--blue-bg);
-    display:flex; align-items:center; justify-content:center; flex-shrink:0;
-  }
-  .c-green .stat-icon{ background:var(--green-bg); }
-  .c-gold .stat-icon{ background:var(--gold-bg); }
-  .c-alert .stat-icon{ background:var(--alert-bg); }
-  .stat-value{ font-size:24px; font-weight:800; line-height:1.1; }
-  .stat-sub{ font-size:11px; color:var(--text-faint); margin-top:3px; }
-
-  /* Main grid */
-  .main-grid{ display:grid; grid-template-columns:1fr 300px; gap:14px; align-items:stretch; }
-  .charts-col{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-
-  .panel{
-    background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px 18px;
-    display:flex; flex-direction:column; justify-content:space-between;
-  }
-  .panel-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-  .panel-title{ display:flex; align-items:center; gap:7px; font-size:13px; font-weight:700; }
-  .panel-title .dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
-  .panel-badge{ font-size:11px; color:var(--text-dim); background:var(--bg); padding:2px 8px; border-radius:20px; font-weight:600; }
-  .legend{ display:flex; gap:12px; font-size:11px; color:var(--text-dim); font-weight:600; }
-  .legend span{ display:flex; align-items:center; gap:5px; }
-  .legend .ldot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
-
-  .chart-container { position:relative; width:100%; height:160px; }
 
   /* Sidebar */
-  .sidebar{ display:flex; flex-direction:column; gap:14px; height:100%; }
-  .side-head{ font-size:11px; font-weight:700; color:var(--text-dim); letter-spacing:0.04em; margin-bottom:10px; }
-
-  /* Gauge Arc Symmetrical Alignment */
-  .gauge-panel { text-align:center; }
-  .gauge-container { position:relative; width:140px; height:85px; margin:0 auto; }
-  .gauge-num-box {
-    position:absolute; bottom:0; left:0; width:100%; text-align:center;
-    display:flex; flex-direction:column; align-items:center; justify-content:center;
+  .sidebar {
+    background: var(--panel-bg);
+    border-right: 1px solid var(--panel-border);
+    display: flex;
+    flex-direction: column;
+    padding: 20px 16px;
   }
-  .gauge-num { font-size:28px; font-weight:800; line-height:1; color:var(--text); }
-  .gauge-label { font-size:9px; color:var(--text-faint); font-weight:700; letter-spacing:0.06em; margin-top:2px; }
-  .gauge-legend { display:flex; justify-content:space-between; width:100%; margin-top:14px; padding-top:10px; border-top:1px solid var(--line); }
-  .gauge-legend div { text-align:center; font-size:10px; color:var(--text-dim); flex:1; }
-  .gauge-legend .gl-val { font-size:11px; font-weight:700; display:block; margin-bottom:2px; }
 
-  /* Route list */
-  .route-list{ display:flex; flex-direction:column; gap:0; }
-  .route-item{ display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--line); }
-  .route-item:last-child{ border-bottom:none; }
-  .route-dot{ width:8px; height:8px; border-radius:50%; background:var(--green); flex-shrink:0; }
-  .route-item.alert .route-dot{ background:var(--alert); }
-  .route-name{ font-size:12px; font-weight:600; }
-  .route-addr{ font-size:10px; color:var(--text-faint); }
-  .route-right{ margin-left:auto; text-align:right; }
-  .route-state{ font-size:10px; font-weight:600; color:var(--green); }
-  .route-item.alert .route-state{ color:var(--alert); }
-
-  /* Summary list */
-  .summary-list div{ display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid var(--line); font-size:11px; }
-  .summary-list div:last-child{ border-bottom:none; }
-  .summary-list span:first-child{ color:var(--text-dim); }
-  .summary-list span:last-child{ font-weight:600; }
-
-  /* Filter Bar & Tables Section */
-  .controls-panel{ margin-top:14px; }
-  .controls-row{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:12px; }
-  .filter-group{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .filter-group label{ font-size:11px; font-weight:600; color:var(--text-dim); }
-  input[type="date"]{
-    background:#FFFFFF; border:1px solid var(--line); color:var(--text);
-    padding:5px 8px; border-radius:6px; font-family:'IBM Plex Mono', monospace; font-size:11px; outline:none;
+  .sidebar-header {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--panel-border);
   }
-  .btn{
-    padding:6px 12px; border-radius:6px; font-family:'Public Sans', sans-serif;
-    font-size:11px; font-weight:700; cursor:pointer; border:none; transition:all 0.2s ease;
+
+  .brand-title {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--text-primary);
   }
-  .btn-primary{ background:var(--blue); color:#FFFFFF; }
-  .btn-primary:hover{ background:#256682; }
-  .btn-secondary{ background:#FFFFFF; color:var(--blue); border:1px solid var(--blue); }
-  .btn-secondary:hover{ background:var(--blue-bg); }
 
-  .tables-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
-  .table-wrapper{ background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .table-head-bar { padding:10px 14px; font-weight:700; font-size:11px; border-bottom:1px solid var(--line); color:var(--text-dim); letter-spacing:0.03em; background:#F8FAFC; }
-  table{ width:100%; border-collapse:collapse; text-align:left; }
-  th{ background:#F8FAFC; padding:8px 12px; font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.04em; border-bottom:1px solid var(--line); }
-  td{ padding:8px 12px; font-size:11px; color:var(--text); border-bottom:1px solid var(--line); }
-  tr:last-child td{ border-bottom:none; }
-  .empty-row{ text-align:center; color:var(--text-faint); padding:24px; font-size:11px; }
+  .brand-sub {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.03em;
+    margin-top: 4px;
+    text-transform: uppercase;
+  }
 
-  .tag-isp-general{ color:var(--alert); font-weight:700; }
-  .tag-isp-primer{ color:var(--gold); font-weight:700; }
-  .tag-local{ color:var(--blue); font-weight:700; }
+  .nav-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+  }
 
-  footer{ text-align:center; color:var(--text-faint); font-size:11px; margin-top:24px; }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: 1px solid transparent;
+    text-decoration: none;
+  }
 
-  @media (max-width:960px){
-    .stats{ grid-template-columns:1fr 1fr; }
-    .main-grid{ grid-template-columns:1fr; }
-    .charts-col{ grid-template-columns:1fr; }
-    .tables-grid{ grid-template-columns:1fr; }
+  .nav-item:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .nav-item.active {
+    color: var(--text-primary);
+    background: var(--panel-border);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .nav-num {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+
+  .sidebar-footer {
+    padding-top: 16px;
+    border-top: 1px solid var(--panel-border);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+
+  /* Content Area */
+  .content-area {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow-y: auto;
+    background: var(--bg-dark);
+  }
+
+  .topbar {
+    height: 56px;
+    border-bottom: 1px solid var(--panel-border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--panel-bg);
+  }
+
+  .topbar-title {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--panel-border);
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-normal);
+  }
+
+  .view-container {
+    padding: 24px;
+    flex: 1;
+    display: none;
+  }
+
+  .view-container.active {
+    display: block;
+  }
+
+  /* Cards & Layout Utilities */
+  .card {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .grid-4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .card-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+
+  .card-value {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .card-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* FSM Banner */
+  .fsm-banner {
+    padding: 20px;
+    border-radius: 6px;
+    border: 1px solid var(--panel-border);
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .fsm-banner.state-NORMAL {
+    background: var(--color-normal-bg);
+    border-color: rgba(46, 160, 67, 0.3);
+  }
+
+  .fsm-banner.state-SOSPECHA {
+    background: var(--color-sospecha-bg);
+    border-color: rgba(210, 153, 34, 0.3);
+  }
+
+  .fsm-banner.state-CONFIRMANDO {
+    background: var(--color-confirmando-bg);
+    border-color: rgba(219, 109, 40, 0.3);
+  }
+
+  .fsm-banner.state-EVENTO {
+    background: var(--color-evento-bg);
+    border-color: rgba(248, 81, 73, 0.3);
+  }
+
+  .fsm-state-title {
+    font-family: var(--font-mono);
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .fsm-state-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .fsm-meta-group {
+    display: flex;
+    gap: 24px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .fsm-meta-item {
+    text-align: right;
+  }
+
+  .fsm-meta-val {
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-top: 2px;
+  }
+
+  /* Data Table / Log Terminal Style */
+  .terminal-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .terminal-table th {
+    text-align: left;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom: 1px solid var(--panel-border);
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .terminal-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    color: var(--text-primary);
+  }
+
+  .terminal-table tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .badge-tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .tag-normal { background: var(--color-normal-bg); color: var(--color-normal); }
+  .tag-sospecha { background: var(--color-sospecha-bg); color: var(--color-sospecha); }
+  .tag-confirmando { background: var(--color-confirmando-bg); color: var(--color-confirmando); }
+  .tag-evento { background: var(--color-evento-bg); color: var(--color-evento); }
+  .tag-blue { background: rgba(88, 166, 255, 0.12); color: var(--color-blue); }
+
+  /* FSM Diagram Visualizer */
+  .fsm-diagram {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 40px 20px;
+    position: relative;
+  }
+
+  .fsm-node {
+    width: 140px;
+    height: 100px;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    z-index: 2;
+    transition: all 0.2s ease;
+  }
+
+  .fsm-node.active {
+    border-width: 2px;
+    box-shadow: 0 0 15px rgba(255, 255, 255, 0.08);
+  }
+
+  .fsm-node.active.node-NORMAL { border-color: var(--color-normal); }
+  .fsm-node.active.node-SOSPECHA { border-color: var(--color-sospecha); }
+  .fsm-node.active.node-CONFIRMANDO { border-color: var(--color-confirmando); }
+  .fsm-node.active.node-EVENTO { border-color: var(--color-evento); }
+
+  .node-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .node-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-family: var(--font-mono);
+  }
+
+  .fsm-connector {
+    flex: 1;
+    height: 2px;
+    background: var(--panel-border);
+    position: relative;
+    margin: 0 8px;
+  }
+
+  .connector-label {
+    position: absolute;
+    top: -18px;
+    width: 100%;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  /* Incident Cards */
+  .incident-card {
+    border: 1px solid var(--panel-border);
+    border-left: 4px solid var(--color-evento);
+    background: var(--panel-bg);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+
+  .incident-card.recovered {
+    border-left-color: var(--color-normal);
+  }
+
+  .incident-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .incident-id {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .incident-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .incident-prop-label {
+    color: var(--text-muted);
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
+
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .filter-btn {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text-muted);
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .filter-btn.active {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .chart-container {
+    height: 350px;
+    position: relative;
   }
 </style>
 </head>
 <body>
-<div class="wrap">
 
-  <!-- Top Bar -->
-  <div class="topbar">
-    <div class="brand">
-      <div class="brand-icon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3484A5" stroke-width="2.2" stroke-linecap="round"><path d="M5 12.5a11 11 0 0 1 14 0"/><path d="M8.5 16a6 6 0 0 1 7 0"/><circle cx="12" cy="19" r="1" fill="#3484A5" stroke="none"/></svg>
+<div class="app-container">
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="brand-title">CONTROLINTERNET</div>
+      <div class="brand-sub">ARQUITECTURA V2</div>
+    </div>
+    
+    <nav class="nav-menu">
+      <a class="nav-item active" onclick="switchView('dashboard', this)">
+        <span class="nav-num">01</span> Dashboard
+      </a>
+      <a class="nav-item" onclick="switchView('fsm', this)">
+        <span class="nav-num">02</span> Estado FSM
+      </a>
+      <a class="nav-item" onclick="switchView('sensors', this)">
+        <span class="nav-num">03</span> Sensores
+      </a>
+      <a class="nav-item" onclick="switchView('events', this)">
+        <span class="nav-num">04</span> Eventos
+      </a>
+      <a class="nav-item" onclick="switchView('timeline', this)">
+        <span class="nav-num">05</span> Línea de tiempo
+      </a>
+      <a class="nav-item" onclick="switchView('reports', this)">
+        <span class="nav-num">06</span> Reportes
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div>ENGINE: MEALY FSM V2.0</div>
+      <div style="margin-top:4px; color:var(--text-muted);" id="sync-time">SYNC: --:--:--</div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="content-area">
+    <header class="topbar">
+      <div class="topbar-title" id="view-title">DASHBOARD OPERATIVO</div>
+      <div class="status-badge">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="system-status-text">MONITOREANDO</span>
       </div>
-      <div>
-        <h1>Control Internet</h1>
-        <div class="brand-meta">
-          <span class="status-pill" id="topStatusPill"><span class="status-dot"></span><span id="topStatusText">Operativo</span></span>
-          <span class="brand-sub">Gateway <span id="brandGatewayIp" class="mono">192.168.0.1</span> · Sonda Continua L0/L1 · Ookla L2 Bajo Demanda</span>
+    </header>
+
+    <!-- Vista 1 — Dashboard -->
+    <div id="view-dashboard" class="view-container active">
+      <div class="fsm-banner state-NORMAL" id="fsm-banner">
+        <div>
+          <div class="fsm-state-title" id="banner-state-title">ESTADO: NORMAL</div>
+          <div class="fsm-state-desc" id="banner-state-desc">Internet estable. Micro-throughput dentro de baseline.</div>
         </div>
-      </div>
-    </div>
-    <div class="topbar-right">
-      actualizado hace <span id="secsAgo">0</span>s<br>
-      <span class="mono" id="topTime">--/--/----, --:--:--</span>
-    </div>
-  </div>
-
-  <!-- Executive Hero Traffic Light Banner -->
-  <div class="hero-banner hero-ok" id="heroBanner">
-    <div class="hero-badge" id="heroBadge">🟢</div>
-    <div class="hero-content">
-      <div class="hero-headline" id="heroHeadline">INTERNET OPERATIVO — 897 Mbps</div>
-      <div class="hero-sub" id="heroSub">La conexión de la oficina funciona a la velocidad contratada sin interrupciones activas.</div>
-    </div>
-  </div>
-
-  <!-- 4 Stat Cards -->
-  <div class="stats">
-    <div class="stat-card">
-      <div class="stat-head">
-        <span class="stat-label">LATENCIA</span>
-        <div class="stat-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3484A5" stroke-width="2.3"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
-      </div>
-      <div class="stat-value"><span id="statPing">—</span> <span style="font-size:13px; color:var(--text-faint); font-weight:500;">ms</span></div>
-      <div class="stat-sub" id="statPingSub">Google DNS 8.8.8.8</div>
-    </div>
-
-    <div class="stat-card c-green">
-      <div class="stat-head">
-        <span class="stat-label">DESCARGA · OOKLA L2</span>
-        <div class="stat-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2CA792" stroke-width="2.3"><path d="M12 4v13M7 12l5 5 5-5"/></svg></div>
-      </div>
-      <div class="stat-value"><span id="statSpeedOfficial">—</span> <span style="font-size:13px; color:var(--text-faint); font-weight:500;">Mbps</span></div>
-      <div class="stat-sub" id="statSpeedTime">Ookla L2 · Bajo Demanda</div>
-    </div>
-
-    <div class="stat-card c-gold">
-      <div class="stat-head">
-        <span class="stat-label">DESCARGA · SONDA CONTINUA</span>
-        <div class="stat-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#C99A1E" stroke-width="2.3"><path d="M2 12h4l3-9 4 18 3-9h6"/></svg></div>
-      </div>
-      <div class="stat-value"><span id="statSpeedLight">—</span> <span style="font-size:13px; color:var(--text-faint); font-weight:500;">Mbps</span></div>
-      <div class="stat-sub" id="statLightServer">Sonda Liviana PycURL</div>
-    </div>
-
-    <div class="stat-card" id="statCardRoute">
-      <div class="stat-head">
-        <span class="stat-label">RUTA</span>
-        <div class="stat-icon" id="statRouteIcon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3484A5" stroke-width="2.3"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.5 18a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></div>
-      </div>
-      <div class="stat-value"><span id="statRouteValue">0</span> <span style="font-size:13px; color:var(--text-faint); font-weight:500;" id="statRouteUnit">caídas</span></div>
-      <div class="stat-sub" id="statRouteSub">Ruta operativa</div>
-    </div>
-  </div>
-
-  <!-- Main Grid Layout -->
-  <div class="main-grid">
-
-    <!-- Left: 2x2 Charts Column -->
-    <div class="charts-col">
-
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title"><span class="dot" style="background:var(--green)"></span>Descarga</span>
-          <div class="legend">
-            <span><span class="ldot" style="background:var(--green)"></span>Oficial</span>
-            <span><span class="ldot" style="background:var(--gold)"></span>Continua</span>
+        <div class="fsm-meta-group">
+          <div class="fsm-meta-item">
+            <div class="card-label">Ultima medicion</div>
+            <div class="fsm-meta-val" id="banner-last-ts">--:--:--</div>
           </div>
-        </div>
-        <div class="chart-container">
-          <canvas id="chartDescarga"></canvas>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title"><span class="dot" style="background:var(--blue)"></span>Latencia</span>
-          <span class="panel-badge" id="panelBadgeLatencia">— ms</span>
-        </div>
-        <div class="chart-container">
-          <canvas id="chartLatencia"></canvas>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title"><span class="dot" style="background:var(--alert)"></span>Caídas — últimas 24h</span>
-          <span class="panel-badge" id="panelBadgeCaidas">0 activas</span>
-        </div>
-        <div class="chart-container">
-          <canvas id="chartCaidas"></canvas>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title"><span class="dot" style="background:var(--blue)"></span>Resolución DNS</span>
-          <span class="panel-badge" id="panelBadgeDNS">google.com</span>
-        </div>
-        <div class="chart-container">
-          <canvas id="chartDNS"></canvas>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- Right: 300px Sidebar Column -->
-    <div class="sidebar">
-
-      <div class="panel gauge-panel">
-        <div class="side-head">SALUD DE CONEXIÓN</div>
-        <div class="gauge-wrap">
-          <div class="gauge-container">
-            <svg width="140" height="85" viewBox="0 0 140 85">
-              <path d="M 15 75 A 55 55 0 0 1 125 75" fill="none" stroke="#E4E8EA" stroke-width="11" stroke-linecap="round"/>
-              <path id="gaugeArc" d="M 15 75 A 55 55 0 0 1 125 75" fill="none" stroke="#2CA792" stroke-width="11" stroke-linecap="round" stroke-dasharray="172.8" stroke-dashoffset="0"/>
-            </svg>
-            <div class="gauge-num-box">
-              <div class="gauge-num" id="gaugeScore">100</div>
-              <div class="gauge-label">SCORE</div>
-            </div>
-          </div>
-          <div class="gauge-legend">
-            <div><span class="gl-val" id="glLatencia" style="color:var(--green)">Bien</span>Latencia</div>
-            <div><span class="gl-val" id="glVelocidad" style="color:var(--green)">Bien</span>Velocidad</div>
-            <div><span class="gl-val" id="glRuta" style="color:var(--green)">Bien</span>Ruta</div>
+          <div class="fsm-meta-item">
+            <div class="card-label">Tiempo en estado</div>
+            <div class="fsm-meta-val" id="banner-state-time">00:00:00</div>
           </div>
         </div>
       </div>
 
-      <div class="panel">
-        <div class="side-head">RUTA MONITOREADA</div>
-        <div class="route-list" id="routeListContainer">
-          <!-- Renderizado dinámico -->
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-label">L0 Conectividad</div>
+          <div class="card-value" id="dash-l0-val">-- ms</div>
+          <div class="card-sub" id="dash-l0-sub">Target: Gateway / DNS</div>
+        </div>
+        <div class="card">
+          <div class="card-label">L1 Micro-throughput</div>
+          <div class="card-value" id="dash-l1-val">-- Mbps</div>
+          <div class="card-sub" id="dash-l1-sub">Intervalo actual: 5 s</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Estado FSM Mealy</div>
+          <div class="card-value" id="dash-fsm-val">NORMAL</div>
+          <div class="card-sub" id="dash-fsm-sub">Accion: Muestreo 5s</div>
         </div>
       </div>
 
-      <div class="panel">
-        <div class="side-head">RESUMEN 24H</div>
-        <div class="summary-list">
-          <div><span>Disponibilidad</span><span id="sumDisponibilidad">100%</span></div>
-          <div><span>Caídas</span><span id="sumCaidasCount">0</span></div>
-          <div><span>Pico descarga</span><span id="sumPicoSpeed">— Mbps</span></div>
-          <div><span>Latencia mín/máx</span><span id="sumMinMaxPing">— / — ms</span></div>
-          <div><span>Baseline sonda</span><span class="mono" id="sumBaselineProbe" style="color:var(--text-faint); font-weight:500;">calibrando</span></div>
+      <div class="card">
+        <div class="card-label" style="margin-bottom:12px;">Actividad reciente (Audit Trail En Tiempo Real)</div>
+        <table class="terminal-table">
+          <thead>
+            <tr>
+              <th>HORA</th>
+              <th>ORIGEN</th>
+              <th>SIMBOLO / ESTADO</th>
+              <th>VALOR REGISTRADO</th>
+              <th>DETALLE / TRANSICION</th>
+            </tr>
+          </thead>
+          <tbody id="dash-activity-body">
+            <tr><td colspan="5" style="color:var(--text-muted);">Cargando telemetria...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Vista 2 — Estado FSM -->
+    <div id="view-fsm" class="view-container">
+      <div class="card">
+        <div class="card-label" style="margin-bottom:16px;">Diagrama de Transicion Mealy FSM V2</div>
+        <div class="fsm-diagram">
+          <div class="fsm-node active node-NORMAL" id="node-NORMAL">
+            <div class="node-title">NORMAL</div>
+            <div class="node-sub">L1: 5 s</div>
+          </div>
+          <div class="fsm-connector">
+            <div class="connector-label">a (anomalia)</div>
+          </div>
+          <div class="fsm-node node-SOSPECHA" id="node-SOSPECHA">
+            <div class="node-title">SOSPECHA</div>
+            <div class="node-sub">L1: 1 s</div>
+          </div>
+          <div class="fsm-connector">
+            <div class="connector-label">a (confirmado)</div>
+          </div>
+          <div class="fsm-node node-CONFIRMANDO" id="node-CONFIRMANDO">
+            <div class="node-title">CONFIRMANDO</div>
+            <div class="node-sub">Fast &gt; Ookla</div>
+          </div>
+          <div class="fsm-connector">
+            <div class="connector-label">co / cd</div>
+          </div>
+          <div class="fsm-node node-EVENTO" id="node-EVENTO">
+            <div class="node-title">EVENTO</div>
+            <div class="node-sub">Recuperacion 3/3</div>
+          </div>
         </div>
       </div>
 
-    </div>
-
-  </div>
-
-  <!-- Bottom Filter Controls & Tables Grid -->
-  <div class="controls-panel">
-    <div class="controls-row">
-      <div class="side-head" style="margin-bottom:0; font-size:12px; color:var(--text);">HISTORIAL & REPORTES</div>
-      <div class="filter-group">
-        <label>Desde:</label>
-        <input type="date" id="dateDesde">
-        <label>Hasta:</label>
-        <input type="date" id="dateHasta">
-        <button class="btn btn-primary" onclick="filterAll()">Filtrar</button>
-        <button class="btn btn-secondary" onclick="downloadPDF()">Descargar Reporte PDF</button>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-label">Detalles del Estado Actual</div>
+          <div style="font-family:var(--font-mono); font-size:12px; margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+            <div>Estado canónico: <span id="fsm-detail-state" class="badge-tag tag-normal">NORMAL</span></div>
+            <div>Frecuencia L1 adaptativa: <span id="fsm-detail-freq">5 segundos</span></div>
+            <div>Contador de recuperacion: <span id="fsm-detail-rec">0 / 3</span></div>
+            <div>Tiempo transcurrido: <span id="fsm-detail-time">00:00:00</span></div>
+            <div>Ultimo simbolo recibido: <span id="fsm-detail-sym">n (lectura normal)</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">Siguiente Accion Programada</div>
+          <div style="font-family:var(--font-mono); font-size:12px; margin-top:10px; color:var(--text-muted);" id="fsm-next-action">
+            Muestreo continuo L1 a 5s. Sin sospecha de anomalia.
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="tables-grid">
-      <div class="table-wrapper">
-        <div class="table-head-bar">HISTORIAL DE CAÍDAS</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Destino</th>
-              <th>Origen</th>
-              <th>Inicio Interrupción</th>
-              <th>Fin Interrupción</th>
-              <th>Duración</th>
-            </tr>
-          </thead>
-          <tbody id="caidasTableBody">
-            <tr><td colspan="5" class="empty-row">Cargando registros...</td></tr>
-          </tbody>
-        </table>
+    <!-- Vista 3 — Sensores -->
+    <div id="view-sensors" class="view-container">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-label">L0 CONECTIVIDAD</div>
+          <div style="font-family:var(--font-mono); font-size:12px; margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+            <div>Gateway: <span id="sen-l0-gw">[ OK ]</span></div>
+            <div>DNS Resolution: <span id="sen-l0-dns">[ OK ]</span></div>
+            <div>TCP Connection: <span id="sen-l0-tcp">[ OK ]</span></div>
+            <div>HTTPS Reachability: <span id="sen-l0-http">[ OK ]</span></div>
+            <div style="margin-top:8px; color:var(--text-muted);" id="sen-l0-ts">Ultima ejecucion: --:--:--</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">L1 MICRO-THROUGHPUT</div>
+          <div style="font-family:var(--font-mono); font-size:12px; margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+            <div>Throughput: <span id="sen-l1-tp">-- Mbps</span></div>
+            <div>Intervalo activo: <span id="sen-l1-int">5 s (NORMAL)</span></div>
+            <div>Streams utilizados: <span id="sen-l1-str">4</span></div>
+            <div>Tiempo medicion: <span id="sen-l1-ms">-- ms</span></div>
+            <div style="margin-top:8px; color:var(--text-muted);" id="sen-l1-ts">Ultima ejecucion: --:--:--</div>
+          </div>
+        </div>
       </div>
 
-      <div class="table-wrapper">
-        <div class="table-head-bar">HISTORIAL DE LENTITUD / DEGRADACIÓN</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Fuente</th>
-              <th>Severidad</th>
-              <th>Velocidad Medida</th>
-              <th>Inicio</th>
-              <th>Duración</th>
-            </tr>
-          </thead>
-          <tbody id="degTableBody">
-            <tr><td colspan="5" class="empty-row">Cargando registros...</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-label">FAST.COM (CONFIRMACION INTERMEDIA)</div>
+          <div style="font-family:var(--font-mono); font-size:12px; margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+            <div>Estado de ejecucion: <span id="sen-fast-exec" class="badge-tag tag-blue">NO EJECUTADO</span></div>
+            <div>Motivo: <span id="sen-fast-reason" style="color:var(--text-muted);">No necesario en estado NORMAL</span></div>
+            <div>Ultima medicion: <span id="sen-fast-val">-- Mbps</span></div>
+          </div>
+        </div>
 
-      <div class="table-wrapper">
-        <div class="table-head-bar">HISTORIAL DE FALLAS DNS</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Dominio</th>
-              <th>Servidor DNS</th>
-              <th>Inicio Falla</th>
-              <th>Fin Falla</th>
-              <th>Duración</th>
-            </tr>
-          </thead>
-          <tbody id="dnsTableBody">
-            <tr><td colspan="5" class="empty-row">Cargando registros...</td></tr>
-          </tbody>
-        </table>
+        <div class="card">
+          <div class="card-label">OOKLA SPEEDTEST (CONFIRMACION PESADA FINAL)</div>
+          <div style="font-family:var(--font-mono); font-size:12px; margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+            <div>Estado de ejecucion: <span id="sen-ookla-exec" class="badge-tag tag-blue">NO EJECUTADO</span></div>
+            <div>Motivo: <span id="sen-ookla-reason" style="color:var(--text-muted);">No necesario sin confirmacion de Fast.com</span></div>
+            <div>Ultima medicion: <span id="sen-ookla-val">-- Mbps</span></div>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <footer>Control Internet — actualiza cada 10s · datos de referencia, conectado a monitor.db</footer>
+    <!-- Vista 4 — Eventos -->
+    <div id="view-events" class="view-container">
+      <div class="filter-bar">
+        <button class="filter-btn active" onclick="filterEvents('all', this)">[ Todos ]</button>
+        <button class="filter-btn" onclick="filterEvents('degradation', this)">[ Degradacion ]</button>
+        <button class="filter-btn" onclick="filterEvents('outage', this)">[ Caida total ]</button>
+        <button class="filter-btn" onclick="filterEvents('active', this)">[ Activos ]</button>
+      </div>
 
+      <div id="events-list-container">
+        <div class="card" style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">Cargando registro de incidentes...</div>
+      </div>
+    </div>
+
+    <!-- Vista 5 — Timeline -->
+    <div id="view-timeline" class="view-container">
+      <div class="card">
+        <div class="card-label" style="margin-bottom:16px;">Linea de Tiempo Sincronizada (Mediciones Mbps + FSM + Evidencias)</div>
+        <div class="chart-container">
+          <canvas id="timelineChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vista 6 — Reportes -->
+    <div id="view-reports" class="view-container">
+      <div class="grid-4">
+        <div class="card">
+          <div class="card-label">Disponibilidad L0</div>
+          <div class="card-value" id="rep-uptime">100.0%</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Degradaciones V2</div>
+          <div class="card-value" id="rep-deg-count">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Caidas Totales</div>
+          <div class="card-value" id="rep-out-count">0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">MTTR Promedio</div>
+          <div class="card-value" id="rep-mttr">0s</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label" style="margin-bottom:12px;">Exportacion de Registros V2</div>
+        <div style="display:flex; gap:12px;">
+          <button class="filter-btn" onclick="exportData('json')">[ Exportar JSON ]</button>
+          <button class="filter-btn" onclick="exportData('csv')">[ Exportar CSV ]</button>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
 
 <script>
-let lastFetchTime = Date.now();
-let chartDescargaObj = null;
-let chartLatenciaObj = null;
-let chartCaidasObj = null;
-let chartDNSObj = null;
+  let currentView = 'dashboard';
+  let timelineChartObj = null;
 
-// Plugin Crosshair para dibujar la línea guía vertical punteada en hover
-const verticalGuidePlugin = {
-  id: 'verticalGuide',
-  afterDraw: (chart) => {
-    if (chart.tooltip?._active?.length) {
-      const activePoint = chart.tooltip._active[0];
-      const ctx = chart.ctx;
-      const x = activePoint.element.x;
-      const topY = chart.scales.y.top;
-      const bottomY = chart.scales.y.bottom;
+  function switchView(viewName, element) {
+    currentView = viewName;
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
 
-      ctx.save();
-      ctx.beginPath();
-      ctx.setLineDash([4, 4]);
-      ctx.moveTo(x, topY);
-      ctx.lineTo(x, bottomY);
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#94A3B8';
-      ctx.stroke();
-      ctx.restore();
+    element.classList.add('active');
+    document.getElementById('view-' + viewName).classList.add('active');
+
+    const titles = {
+      'dashboard': 'DASHBOARD OPERATIVO',
+      'fsm': 'VISUALIZADOR MEALY FSM',
+      'sensors': 'OBSERVACION Y SENSORES',
+      'events': 'REGISTRO DE INCIDENTES',
+      'timeline': 'LINEA DE TIEMPO SINCRONIZADA',
+      'reports': 'REPORTES Y EXPORTACION'
+    };
+    document.getElementById('view-title').textContent = titles[viewName] || 'CONTROLINTERNET V2';
+
+    if (viewName === 'timeline') {
+      renderTimelineChart();
     }
   }
-};
 
-function updateClock() {
-  const elapsed = Math.floor((Date.now() - lastFetchTime) / 1000);
-  document.getElementById('secsAgo').textContent = elapsed;
-  const now = new Date();
-  document.getElementById('topTime').textContent = now.toLocaleString('es-PE', {
-    day:'2-digit', month:'2-digit', year:'numeric',
-    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
-  });
-}
+  async function fetchStatus() {
+    try {
+      const res = await fetch('/api/v2/status');
+      const data = await res.json();
+      
+      const now = new Date();
+      document.getElementById('sync-time').textContent = 'SYNC: ' + now.toTimeString().split(' ')[0];
 
-setInterval(updateClock, 1000);
+      // Banner & State
+      const state = data.current_state || 'NORMAL';
+      const banner = document.getElementById('fsm-banner');
+      banner.className = 'fsm-banner state-' + state;
+      document.getElementById('banner-state-title').textContent = 'ESTADO: ' + state;
+      document.getElementById('dash-fsm-val').textContent = state;
+      
+      const interval = data.l1_adaptive_interval_s || 5;
+      document.getElementById('dash-l1-sub').textContent = 'Intervalo actual: ' + interval + ' s';
 
-async function fetchStatus() {
-  try {
-    const res = await fetch('/api/status');
-    const data = await res.json();
-    lastFetchTime = Date.now();
-    renderTopAndCards(data);
-    renderSidebarRoute(data.destinos, data.estado_dns, data.gateway_ip, data.isp_hop_ip);
-  } catch (err) {
-    console.error("Error obteniendo status:", err);
-  }
-}
+      // Readings
+      const l0 = data.latest_readings.l0;
+      if (l0) {
+        document.getElementById('dash-l0-val').textContent = (l0.latency_ms ? l0.latency_ms.toFixed(1) : '0') + ' ms';
+      }
 
-function renderTopAndCards(data) {
-  if (data.gateway_ip) {
-    document.getElementById('brandGatewayIp').textContent = data.gateway_ip;
-  }
+      const l1 = data.latest_readings.l1;
+      if (l1) {
+        document.getElementById('dash-l1-val').textContent = l1.throughput_mbps.toFixed(1) + ' Mbps';
+        document.getElementById('banner-last-ts').textContent = (l1.timestamp || '').split('T')[1]?.split('.')[0] || '--:--:--';
+      }
 
-  const caidasActivas = data.destinos.filter(d => d.estado === 'DOWN');
-  const topPill = document.getElementById('topStatusPill');
-  const topText = document.getElementById('topStatusText');
-  const heroBanner = document.getElementById('heroBanner');
-  const heroBadge = document.getElementById('heroBadge');
-  const heroHeadline = document.getElementById('heroHeadline');
-  const heroSub = document.getElementById('heroSub');
+      // FSM Nodes highlight
+      ['NORMAL', 'SOSPECHA', 'CONFIRMANDO', 'EVENTO'].forEach(s => {
+        const node = document.getElementById('node-' + s);
+        if (node) {
+          if (s === state) node.classList.add('active');
+          else node.classList.remove('active');
+        }
+      });
 
-  // Evaluaciones de Frescura
-  const FRESHNESS_L1_MAX_SEC = 180;    // Probe continuo L1 (3 minutos)
-  const FRESHNESS_L2_MAX_SEC = 86400;  // Test oficial Ookla L2 (24 horas)
-
-  const isL1Fresh = data.ultimo_probe_liviano && data.ultimo_probe_liviano.timestamp &&
-    (Math.floor((Date.now() - new Date(data.ultimo_probe_liviano.timestamp).getTime()) / 1000) <= FRESHNESS_L1_MAX_SEC);
-
-  const isL2Fresh = data.ultima_velocidad && data.ultima_velocidad.timestamp &&
-    (Math.floor((Date.now() - new Date(data.ultima_velocidad.timestamp).getTime()) / 1000) <= FRESHNESS_L2_MAX_SEC);
-
-  const speedVal = isL1Fresh ? data.ultimo_probe_liviano.mbps_aproximado : (isL2Fresh ? data.ultima_velocidad.descarga_mbps : null);
-
-  const fsmState = data.fsm_state || "NORMAL";
-  const recCount = data.recovery_counter || 0;
-  const recK = data.recovery_k || 3;
-  const activeEv = data.active_event;
-
-  if (caidasActivas.length > 0) {
-    topPill.className = 'status-pill down';
-    topText.textContent = `FSM: EVENTO (${caidasActivas.length} alerta)`;
-
-    const firstDown = caidasActivas[0];
-    const durStr = firstDown.desde ? formatTimeAgo(firstDown.desde) : '';
-    heroBanner.className = 'hero-banner hero-alert';
-    heroBadge.textContent = '🔴';
-    heroHeadline.textContent = 'SIN INTERNET — CAÍDA TOTAL EN CURSO';
-    heroSub.textContent = `La conexión hacia ${firstDown.destino} está interrumpida desde las ${formatTimeShort(firstDown.desde)} (${durStr}). Origen: FSM V2.`;
-  } else if (fsmState === 'CONFIRMANDO') {
-    topPill.className = 'status-pill warn';
-    topText.textContent = 'FSM: CONFIRMANDO';
-
-    heroBanner.className = 'hero-banner hero-warn';
-    heroBadge.textContent = '🟠';
-    heroHeadline.textContent = 'CONFIRMANDO — L2 EN EJECUCIÓN (PRUEBA BAJO DEMANDA)';
-    heroSub.textContent = 'La FSM activó la prueba pesada L2 (Ookla/Speedtest) bajo demanda para validar la anomalía. No es un monitoreo periódico.';
-  } else if (fsmState === 'SOSPECHA') {
-    topPill.className = 'status-pill warn';
-    topText.textContent = 'FSM: SOSPECHA';
-
-    heroBanner.className = 'hero-banner hero-warn';
-    heroBadge.textContent = '🟡';
-    heroHeadline.textContent = 'SOSPECHA DETECTADA — EVALUANDO EVIDENCIA L0/L1';
-    heroSub.textContent = 'La sonda continua registró lecturas anómalas. La FSM se encuentra acumulando evidencia en estado SOSPECHA.';
-  } else if (fsmState === 'EVENTO') {
-    topPill.className = 'status-pill down';
-    if (recCount > 0) {
-      topText.textContent = `FSM: EVENTO (Recuperación: ${recCount}/${recK})`;
-      heroBanner.className = 'hero-banner hero-warn';
-      heroBadge.textContent = '🟡';
-      heroHeadline.textContent = `EVENTO EN RECUPERACIÓN — ${recCount}/${recK} MUESTRAS SANAS`;
-      heroSub.textContent = `Lectura saludable registrada. La FSM permanecerá en EVENTO hasta completar ${recK}/${recK} lecturas sanas consecutivas (1/3 y 2/3 NO significan NORMAL).`;
-    } else {
-      topText.textContent = 'FSM: EVENTO';
-      heroBanner.className = 'hero-banner hero-alert';
-      heroBadge.textContent = '🔴';
-      const evType = activeEv ? activeEv.event_type : 'DEGRADACIÓN CONFIRMADA';
-      const evDiag = activeEv ? (activeEv.diagnosis_code || activeEv.state_origin) : 'L2 Confirmado';
-      heroHeadline.textContent = `EVENTO V2 EN CURSO — ${evType}`;
-      heroSub.textContent = `Diagnóstico: ${evDiag}. Confirmado por L2 bajo demanda.`;
+      document.getElementById('fsm-detail-state').textContent = state;
+      document.getElementById('fsm-detail-freq').textContent = interval + ' segundos';
+    } catch (e) {
+      console.error('Error fetching status:', e);
     }
-  } else {
-    topPill.className = 'status-pill ok';
-    topText.textContent = 'FSM: NORMAL';
-
-    heroBanner.className = 'hero-banner hero-ok';
-    heroBadge.textContent = '🟢';
-    const mbpsText = speedVal ? `${speedVal.toFixed(0)} Mbps` : 'OPERATIVO';
-    heroHeadline.textContent = `INTERNET OK — VELOCIDAD EN ${mbpsText}`;
-    heroSub.textContent = 'La conexión de la oficina funciona con normalidad. FSM Mealy en estado NORMAL.';
   }
 
-  // Stat Card 1: Latencia
-  if (data.ultima_velocidad && data.ultima_velocidad.ping_ms) {
-    document.getElementById('statPing').textContent = data.ultima_velocidad.ping_ms.toFixed(0);
-    const bbMs = data.ultima_velocidad.latencia_bajo_carga_ms ? data.ultima_velocidad.latencia_bajo_carga_ms.toFixed(0) : '—';
-    document.getElementById('statPingSub').textContent = `Carga: ${bbMs} ms · Google DNS 8.8.8.8`;
-    document.getElementById('panelBadgeLatencia').textContent = `${data.ultima_velocidad.ping_ms.toFixed(0)} ms`;
+  async function fetchActivity() {
+    try {
+      const res = await fetch('/api/v2/fsm-history?limit=15');
+      const history = await res.json();
+      const tbody = document.getElementById('dash-activity-body');
+      tbody.innerHTML = '';
+
+      if (!history || history.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted);">Sin transiciones registradas</td></tr>';
+        return;
+      }
+
+      history.forEach(row => {
+        const tr = document.createElement('tr');
+        const time = (row.timestamp || '').split('T')[1]?.split('.')[0] || '';
+        const symbolTag = `<span class="badge-tag tag-blue">${row.input_symbol}</span>`;
+        
+        tr.innerHTML = `
+          <td>${time}</td>
+          <td>FSM</td>
+          <td>${symbolTag}</td>
+          <td>${row.current_state} &rarr; ${row.next_state}</td>
+          <td>${row.output_action || 'TRANSICION'}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    } catch (e) {
+      console.error('Error fetching activity:', e);
+    }
   }
 
-  // Stat Card 2: Test Oficial Ookla L2
-  if (data.ultima_velocidad && data.ultima_velocidad.descarga_mbps) {
-    document.getElementById('statSpeedOfficial').textContent = data.ultima_velocidad.descarga_mbps.toFixed(0);
-    const timeAgo = formatTimeAgo(data.ultima_velocidad.timestamp);
-    const staleLabel = isL2Fresh ? '' : ' ⚠️ (anterior)';
-    document.getElementById('statSpeedTime').textContent = `Ookla L2 · Bajo Demanda · ${timeAgo}${staleLabel}`;
+  async function fetchSensors() {
+    try {
+      const res = await fetch('/api/v2/sensors-status');
+      const data = await res.json();
+
+      if (data.l1 && data.l1.last_reading) {
+        document.getElementById('sen-l1-tp').textContent = data.l1.last_reading.throughput_mbps.toFixed(1) + ' Mbps';
+        document.getElementById('sen-l1-int').textContent = data.l1.interval_seconds + ' s';
+      }
+
+      const fast = data.fast;
+      document.getElementById('sen-fast-exec').textContent = fast.is_executed ? 'EJECUTADO' : 'NO EJECUTADO';
+      document.getElementById('sen-fast-reason').textContent = fast.reason;
+      if (fast.last_reading) {
+        document.getElementById('sen-fast-val').textContent = fast.last_reading.throughput_mbps.toFixed(1) + ' Mbps';
+      }
+
+      const ookla = data.ookla;
+      document.getElementById('sen-ookla-exec').textContent = ookla.is_executed ? 'EJECUTADO' : 'NO EJECUTADO';
+      document.getElementById('sen-ookla-reason').textContent = ookla.reason;
+      if (ookla.last_reading) {
+        document.getElementById('sen-ookla-val').textContent = ookla.last_reading.download_mbps.toFixed(1) + ' Mbps';
+      }
+    } catch (e) {
+      console.error('Error fetching sensors:', e);
+    }
   }
 
-  // Stat Card 3: Sonda Continua (PycURL)
-  if (data.ultimo_probe_liviano) {
-    document.getElementById('statSpeedLight').textContent = data.ultimo_probe_liviano.mbps_aproximado.toFixed(1);
-    const serverName = data.ultimo_probe_liviano.servidor ? data.ultimo_probe_liviano.servidor : 'Cloudflare CDN';
-    const timeAgoL1 = formatTimeAgo(data.ultimo_probe_liviano.timestamp);
-    const staleL1Label = isL1Fresh ? ` · ${timeAgoL1}` : ' ⚠️ (obsoleto)';
-    document.getElementById('statLightServer').textContent = `Sonda PycURL · ${serverName}${staleL1Label}`;
+  let allEvents = [];
+  async function fetchEvents() {
+    try {
+      const res = await fetch('/api/v2/events');
+      allEvents = await res.json();
+      renderEvents(allEvents);
+    } catch (e) {
+      console.error('Error fetching events:', e);
+    }
   }
 
-  // Stat Card 4: Ruta
-  const statCardRoute = document.getElementById('statCardRoute');
-  const statRouteVal = document.getElementById('statRouteValue');
-  const statRouteSub = document.getElementById('statRouteSub');
-  const statRouteIcon = document.getElementById('statRouteIcon');
+  function renderEvents(events) {
+    const container = document.getElementById('events-list-container');
+    container.innerHTML = '';
 
-  if (caidasActivas.length > 0) {
-    statCardRoute.className = 'stat-card c-alert';
-    statRouteVal.textContent = caidasActivas.length;
-    document.getElementById('statRouteUnit').textContent = caidasActivas.length === 1 ? 'caída activa' : 'caídas activas';
-    const firstDown = caidasActivas[0];
-    const timeStr = firstDown.desde ? formatTimeShort(firstDown.desde) : '';
-    statRouteSub.textContent = `${firstDown.destino} · desde ${timeStr}`;
-    statRouteIcon.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#C2483C" stroke-width="2.3"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.5 18a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>`;
-  } else {
-    statCardRoute.className = 'stat-card c-green';
-    statRouteVal.textContent = '0';
-    document.getElementById('statRouteUnit').textContent = 'caídas activas';
-    statRouteSub.textContent = 'Ruta de red operativa';
-    statRouteIcon.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2CA792" stroke-width="2.3"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>`;
+    if (!events || events.length === 0) {
+      container.innerHTML = '<div class="card" style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">Sin incidentes registrados.</div>';
+      return;
+    }
+
+    events.forEach(ev => {
+      const card = document.createElement('div');
+      card.className = 'incident-card ' + (ev.end_time ? 'recovered' : '');
+
+      const start = (ev.start_time || '').replace('T', ' ').split('.')[0];
+      const end = ev.end_time ? ev.end_time.replace('T', ' ').split('.')[0] : 'EN CURSO';
+      const dur = ev.duration_seconds ? ev.duration_seconds + ' s' : 'Observando';
+
+      card.innerHTML = `
+        <div class="incident-header">
+          <div class="incident-id">#${String(ev.id).padStart(3, '0')} ${ev.event_type || 'INCIDENTE'}</div>
+          <span class="badge-tag ${ev.end_time ? 'tag-normal' : 'tag-evento'}">${ev.end_time ? 'RECUPERADO' : 'ACTIVO'}</span>
+        </div>
+        <div class="incident-grid">
+          <div>
+            <div class="incident-prop-label">Inicio observado</div>
+            <div>${start}</div>
+          </div>
+          <div>
+            <div class="incident-prop-label">Confirmado</div>
+            <div>${start}</div>
+          </div>
+          <div>
+            <div class="incident-prop-label">Recuperado</div>
+            <div>${end}</div>
+          </div>
+          <div>
+            <div class="incident-prop-label">Duracion observada</div>
+            <div>${dur}</div>
+          </div>
+        </div>
+      `;
+      container.appendChild(card);
+    });
   }
 
-  // Score de Salud de Conexión
-  let score = 100;
-  let latState = 'Bien';
-  let velState = 'Bien';
-  let rutaState = 'Bien';
+  function filterEvents(type, btn) {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
 
-  if (caidasActivas.length > 0) {
-    score -= 40;
-    rutaState = 'Atenc.';
-    document.getElementById('glRuta').style.color = 'var(--alert)';
-  } else {
-    document.getElementById('glRuta').style.color = 'var(--green)';
+    if (type === 'all') renderEvents(allEvents);
+    else if (type === 'active') renderEvents(allEvents.filter(e => e.is_active));
+    else if (type === 'degradation') renderEvents(allEvents.filter(e => (e.event_type || '').includes('DEGRADACION')));
+    else if (type === 'outage') renderEvents(allEvents.filter(e => (e.event_type || '').includes('CAIDA')));
   }
 
-  if (data.estado_dns && data.estado_dns.estado === 'DOWN') {
-    score -= 20;
-  }
+  async function renderTimelineChart() {
+    try {
+      const res = await fetch('/api/v2/timeline?limit=100');
+      const data = await res.json();
 
-  if (data.ultima_velocidad && data.ultima_velocidad.ping_ms > 30) {
-    score -= 10;
-    latState = 'Atenc.';
-    document.getElementById('glLatencia').style.color = 'var(--gold)';
-  } else {
-    document.getElementById('glLatencia').style.color = 'var(--green)';
-  }
+      const ctx = document.getElementById('timelineChart').getContext('2d');
+      if (timelineChartObj) timelineChartObj.destroy();
 
-  score = Math.max(0, score);
-  document.getElementById('gaugeScore').textContent = score;
+      const labels = (data.l1 || []).map(r => (r.timestamp || '').split('T')[1]?.split('.')[0] || '');
+      const l1Vals = (data.l1 || []).map(r => r.throughput_mbps);
 
-  document.getElementById('glLatencia').textContent = latState;
-  document.getElementById('glVelocidad').textContent = velState;
-  document.getElementById('glRuta').textContent = rutaState;
-
-  const gaugeArc = document.getElementById('gaugeArc');
-  const arcLength = 172.8;
-  const dashoffset = arcLength * (1 - score / 100);
-  gaugeArc.style.strokeDasharray = `${arcLength}`;
-  gaugeArc.style.strokeDashoffset = `${dashoffset}`;
-  if (score >= 90) gaugeArc.setAttribute('stroke', '#2CA792');
-  else if (score >= 70) gaugeArc.setAttribute('stroke', '#F0C84F');
-  else gaugeArc.setAttribute('stroke', '#C2483C');
-
-  const sumBaseline = document.getElementById('sumBaselineProbe');
-  if (data.probe_liviano_baseline) {
-    sumBaseline.textContent = `${data.probe_liviano_baseline.toFixed(1)} Mbps`;
-  } else {
-    sumBaseline.textContent = `calibrando ${data.probe_liviano_count || 0}/20`;
-  }
-}
-
-function renderSidebarRoute(destinos, estadoDns, gatewayIp, ispHopIp) {
-  const container = document.getElementById('routeListContainer');
-  const items = [];
-
-  const destMap = {};
-  destinos.forEach(d => { destMap[d.destino] = d; });
-
-  // 1. Gateway
-  const gwState = destMap['gateway'] || { estado: 'UP' };
-  const gwUp = gwState.estado === 'UP';
-  items.push(`
-    <div class="route-item ${gwUp ? '' : 'alert'}">
-      <div class="route-dot"></div>
-      <div><div class="route-name">Gateway local</div><div class="route-addr mono">${gatewayIp || '192.168.0.1'}</div></div>
-      <div class="route-right"><div class="route-state">${gwUp ? 'operativo' : 'interrumpido'}</div></div>
-    </div>
-  `);
-
-  // 2. ISP Hop
-  if (ispHopIp) {
-    const hopState = destMap['isp_hop'] || { estado: 'UP' };
-    const hopUp = hopState.estado === 'UP';
-    items.push(`
-      <div class="route-item ${hopUp ? '' : 'alert'}">
-        <div class="route-dot"></div>
-        <div><div class="route-name">ISP primer salto</div><div class="route-addr mono">${ispHopIp}</div></div>
-        <div class="route-right"><div class="route-state">${hopUp ? 'operativo' : 'interrumpido'}</div></div>
-      </div>
-    `);
-  }
-
-  // 3. Cloudflare
-  const cfState = destMap['1.1.1.1'] || { estado: 'UP' };
-  const cfUp = cfState.estado === 'UP';
-  items.push(`
-    <div class="route-item ${cfUp ? '' : 'alert'}">
-      <div class="route-dot"></div>
-      <div><div class="route-name">Cloudflare</div><div class="route-addr mono">1.1.1.1</div></div>
-      <div class="route-right"><div class="route-state">${cfUp ? 'operativo' : 'interrumpido'}</div></div>
-    </div>
-  `);
-
-  // 4. Google DNS
-  const gState = destMap['8.8.8.8'] || { estado: 'UP' };
-  const gUp = gState.estado === 'UP';
-  items.push(`
-    <div class="route-item ${gUp ? '' : 'alert'}">
-      <div class="route-dot"></div>
-      <div><div class="route-name">Google DNS</div><div class="route-addr mono">8.8.8.8</div></div>
-      <div class="route-right"><div class="route-state">${gUp ? 'operativo' : 'interrumpido'}</div></div>
-    </div>
-  `);
-
-  // 5. DNS resolución
-  if (estadoDns) {
-    const dnsUp = estadoDns.estado === 'UP';
-    items.push(`
-      <div class="route-item ${dnsUp ? '' : 'alert'}">
-        <div class="route-dot"></div>
-        <div><div class="route-name">DNS resolución</div><div class="route-addr mono">${estadoDns.dominio}</div></div>
-        <div class="route-right"><div class="route-state">${dnsUp ? 'operativo' : 'fallando'}</div></div>
-      </div>
-    `);
-  }
-
-  container.innerHTML = items.join('');
-}
-
-async function loadChartsData() {
-  const todayStr = getLocalDateString();
-  const desde = document.getElementById('dateDesde')?.value || todayStr;
-  const hasta = document.getElementById('dateHasta')?.value || todayStr;
-
-  try {
-    const [resOficial, resLiviano, resCaidas, resDNS] = await Promise.all([
-      fetch(`/velocidad?desde=${desde}&hasta=${hasta}`),
-      fetch(`/probe-liviano?desde=${desde}&hasta=${hasta}`),
-      fetch(`/caidas?desde=${desde}&hasta=${hasta}`),
-      fetch(`/dns?desde=${desde}&hasta=${hasta}`)
-    ]);
-
-    const oficialData = await resOficial.json();
-    const livianoData = await resLiviano.json();
-    const caidasData = await resCaidas.json();
-    const dnsData = await resDNS.json();
-
-    renderChartDescarga(oficialData, livianoData);
-    renderChartLatencia(oficialData);
-    renderChartCaidas(caidasData);
-    renderChartDNS(dnsData);
-    renderSummary24h(oficialData, caidasData);
-  } catch (err) {
-    console.error("Error cargando datos de gráficos:", err);
-  }
-}
-
-function renderChartDescarga(oficialList, livianoList) {
-  const ctx = document.getElementById('chartDescarga').getContext('2d');
-  if (chartDescargaObj) chartDescargaObj.destroy();
-
-  const labelsMap = new Set();
-  oficialList.forEach(m => labelsMap.add(formatTimeShort(m.timestamp)));
-  livianoList.forEach(m => labelsMap.add(formatTimeShort(m.timestamp)));
-  let labels = Array.from(labelsMap).sort();
-
-  if (labels.length === 0) {
-    labels = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
-  }
-
-  const oficialMap = {};
-  oficialList.forEach(m => { oficialMap[formatTimeShort(m.timestamp)] = m; });
-
-  const livianoMap = {};
-  livianoList.forEach(m => { livianoMap[formatTimeShort(m.timestamp)] = m; });
-
-  const dataOficial = labels.map(l => oficialMap[l] ? oficialMap[l].descarga_mbps : null);
-  const dataLiviano = labels.map(l => livianoMap[l] ? livianoMap[l].mbps_aproximado : null);
-
-  chartDescargaObj = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Oficial Ookla (Mbps)',
-          data: dataOficial,
-          borderColor: '#2CA792',
-          backgroundColor: 'rgba(44, 167, 146, 0.08)',
-          borderWidth: 2.5,
-          tension: 0.4,
-          fill: true,
-          spanGaps: true,
-          pointRadius: 0,
-          pointHoverRadius: 6,
-          pointHoverBackgroundColor: '#FFFFFF',
-          pointHoverBorderColor: '#2CA792',
-          pointHoverBorderWidth: 3
+      timelineChartObj = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'L1 Throughput (Mbps)',
+            data: l1Vals,
+            borderColor: '#58A6FF',
+            backgroundColor: 'rgba(88, 166, 255, 0.1)',
+            borderWidth: 2,
+            tension: 0.2,
+            fill: true
+          }]
         },
-        {
-          label: 'Sonda Liviana L1 (Mbps)',
-          data: dataLiviano,
-          borderColor: '#D97706',
-          backgroundColor: 'rgba(217, 119, 6, 0.05)',
-          borderWidth: 2,
-          tension: 0.4,
-          fill: true,
-          spanGaps: true,
-          pointRadius: 0,
-          pointHoverRadius: 6,
-          pointHoverBackgroundColor: '#FFFFFF',
-          pointHoverBorderColor: '#D97706',
-          pointHoverBorderWidth: 3
-        }
-      ]
-    },
-    plugins: [verticalGuidePlugin],
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1B2530',
-          titleColor: '#FFFFFF',
-          bodyColor: '#E2E8F0',
-          padding: 12,
-          displayColors: true,
-          callbacks: {
-            title: (context) => `Hora: ${context[0].label}`,
-            label: (context) => {
-              const val = context.parsed.y;
-              if (val === null) return null;
-              return `${context.dataset.label}: ${val.toFixed(1)} Mbps`;
-            }
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { ticks: { color: '#8B949E', font: { family: 'IBM Plex Mono', size: 10 } }, grid: { color: '#1F2633' } },
+            y: { ticks: { color: '#8B949E', font: { family: 'IBM Plex Mono', size: 10 } }, grid: { color: '#1F2633' } }
+          },
+          plugins: {
+            legend: { labels: { color: '#E6EDF3', font: { family: 'IBM Plex Mono', size: 11 } } }
           }
         }
-      },
-      scales: {
-        x: { ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { color: '#E4E8EA' } }
-      }
-    }
-  });
-}
-
-function renderChartLatencia(oficialList) {
-  const ctx = document.getElementById('chartLatencia').getContext('2d');
-  if (chartLatenciaObj) chartLatenciaObj.destroy();
-
-  let labels = oficialList.map(m => formatTimeShort(m.timestamp));
-  let pings = oficialList.map(m => m.ping_ms ?? null);
-  let cargas = oficialList.map(m => m.latencia_bajo_carga_ms ?? null);
-
-  if (labels.length === 0) {
-    labels = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
-    pings = [8, 8, 9, 8, 8, 8, 8];
-    cargas = [75, 80, 78, 71, 75, 82, 78];
-  }
-
-  chartLatenciaObj = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Ping (ms)',
-          data: pings,
-          borderColor: '#3484A5',
-          backgroundColor: 'rgba(52, 132, 165, 0.08)',
-          borderWidth: 2.5,
-          tension: 0.4,
-          fill: true,
-          pointRadius: 0,
-          pointHoverRadius: 6,
-          pointHoverBackgroundColor: '#FFFFFF',
-          pointHoverBorderColor: '#3484A5',
-          pointHoverBorderWidth: 3
-        },
-        {
-          label: 'Bajo Carga (ms)',
-          data: cargas,
-          borderColor: '#C2483C',
-          borderWidth: 1.8,
-          borderDash: [3, 3],
-          tension: 0.4,
-          pointRadius: 0,
-          pointHoverRadius: 6,
-          pointHoverBackgroundColor: '#FFFFFF',
-          pointHoverBorderColor: '#C2483C',
-          pointHoverBorderWidth: 3
-        }
-      ]
-    },
-    plugins: [verticalGuidePlugin],
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1B2530',
-          titleColor: '#FFFFFF',
-          bodyColor: '#E2E8F0',
-          padding: 12,
-          callbacks: {
-            title: (context) => `Hora: ${context[0].label}`,
-            label: (context) => {
-              const val = context.parsed.y;
-              if (val === null) return null;
-              return `${context.dataset.label}: ${val.toFixed(0)} ms`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: { ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { color: '#E4E8EA' } }
-      }
-    }
-  });
-}
-
-function renderChartCaidas(caidasList) {
-  const ctx = document.getElementById('chartCaidas').getContext('2d');
-  if (chartCaidasObj) chartCaidasObj.destroy();
-
-  // Agrupar caídas que inicien en el mismo minuto en 1 sola barra por evento de corte
-  const groupedCaidas = {};
-  caidasList.forEach(c => {
-    const timeKey = formatTimeShort(c.inicio);
-    if (!groupedCaidas[timeKey] || (c.duracion_segundos || 0) > (groupedCaidas[timeKey].duracion_segundos || 0)) {
-      groupedCaidas[timeKey] = c;
-    }
-  });
-
-  const uniqueCaidas = Object.values(groupedCaidas);
-  const activeCount = caidasList.filter(c => !c.fin).length;
-  document.getElementById('panelBadgeCaidas').textContent = activeCount > 0 ? `${activeCount} activa` : '0 activas';
-
-  let labels = uniqueCaidas.slice(-10).map(c => formatTimeShort(c.inicio));
-  let durations = uniqueCaidas.slice(-10).map(c => c.duracion_segundos || 10);
-  let barColor = '#C2483C';
-
-  if (labels.length === 0) {
-    labels = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
-    durations = [0, 0, 0, 0, 0, 0, 0];
-    barColor = '#2CA792';
-  }
-
-  chartCaidasObj = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Duración del Corte (segundos)',
-        data: durations,
-        backgroundColor: barColor,
-        borderRadius: 4,
-        barThickness: 12
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1B2530',
-          titleColor: '#FFFFFF',
-          bodyColor: '#E2E8F0',
-          padding: 12,
-          callbacks: {
-            title: (context) => `Hora de Corte: ${context[0].label}`,
-            label: (context) => `Duración: ${context.parsed.y}s (Corte General de Red)`
-          }
-        }
-      },
-      scales: {
-        x: { ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { color: '#E4E8EA' } }
-      }
-    }
-  });
-}
-
-function renderChartDNS(dnsList, oficialList, livianoList) {
-  const ctx = document.getElementById('chartDNS').getContext('2d');
-  if (chartDNSObj) chartDNSObj.destroy();
-
-  // Construir el eje de tiempo continuo idéntico al gráfico de Descarga y Latencia
-  const labelsMap = new Set();
-  (oficialList || []).forEach(m => labelsMap.add(formatTimeShort(m.timestamp)));
-  (livianoList || []).forEach(m => labelsMap.add(formatTimeShort(m.timestamp)));
-  let labels = Array.from(labelsMap).sort();
-
-  if (labels.length === 0) {
-    labels = ['18:45', '18:47', '18:49', '18:51', '18:53', '18:55', '18:57'];
-  }
-
-  // Set de timestamps que sufrieron falla de DNS
-  const dnsFailures = new Set((dnsList || []).map(d => formatTimeShort(d.inicio)));
-
-  // Generar curva de respuesta DNS continua en ms (~14.5 ms)
-  const durations = labels.map((lbl, idx) => {
-    if (dnsFailures.has(lbl)) {
-      return 0; // Falla o interrupción
-    }
-    const base = 14.5;
-    const variation = (Math.sin(idx * 0.8) * 1.2) + (idx % 2 === 0 ? 0.3 : -0.3);
-    return Number((base + variation).toFixed(1));
-  });
-
-  chartDNSObj = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Respuesta DNS (ms)',
-        data: durations,
-        borderColor: '#3484A5',
-        backgroundColor: 'rgba(52, 132, 165, 0.08)',
-        borderWidth: 2,
-        tension: 0.4,
-        fill: true,
-        spanGaps: true,
-        pointRadius: 0,
-        pointHoverRadius: 6,
-        pointHoverBackgroundColor: '#FFFFFF',
-        pointHoverBorderColor: '#3484A5',
-        pointHoverBorderWidth: 3
-      }]
-    },
-    plugins: [verticalGuidePlugin],
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#1B2530',
-          titleColor: '#FFFFFF',
-          bodyColor: '#E2E8F0',
-          padding: 12,
-          callbacks: {
-            title: (context) => `Hora: ${context[0].label}`,
-            label: (context) => {
-              const val = context.parsed.y;
-              if (val === 0) return `DNS Google (8.8.8.8): Falla / Tiempo Agotado (0 ms)`;
-              return `DNS Google (8.8.8.8): ${val.toFixed(1)} ms (Operativo)`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: { ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { color: '#8F99A3', font: { size: 9, family: 'IBM Plex Mono' } }, grid: { color: '#E4E8EA' } }
-      }
-    }
-  });
-}
-
-function renderSummary24h(oficialList, caidasList) {
-  // Contar caídas únicas por evento
-  const uniqueTimes = new Set(caidasList.map(c => formatTimeShort(c.inicio)));
-  document.getElementById('sumCaidasCount').textContent = uniqueTimes.size;
-
-  if (oficialList.length > 0) {
-    const speeds = oficialList.map(m => m.descarga_mbps || 0);
-    const maxSpeed = Math.max(...speeds);
-    document.getElementById('sumPicoSpeed').textContent = `${maxSpeed.toFixed(0)} Mbps`;
-
-    const pings = oficialList.map(m => m.ping_ms || 0).filter(p => p > 0);
-    if (pings.length > 0) {
-      const minP = Math.min(...pings);
-      const maxP = Math.max(...pings);
-      document.getElementById('sumMinMaxPing').textContent = `${minP.toFixed(0)} / ${maxP.toFixed(0)} ms`;
+      });
+    } catch (e) {
+      console.error('Error rendering timeline:', e);
     }
   }
 
-  let totalDownSec = 0;
-  caidasList.forEach(c => { totalDownSec += c.duracion_segundos || 0; });
-  const totalDaySec = 86400;
-  const avail = Math.max(0, ((totalDaySec - totalDownSec) / totalDaySec) * 100);
-  document.getElementById('sumDisponibilidad').textContent = `${avail.toFixed(1)}%`;
-}
-
-async function loadCaidasTable() {
-  const desde = document.getElementById('dateDesde').value || '2020-01-01';
-  const hasta = document.getElementById('dateHasta').value || '2099-12-31';
-  try {
-    const res = await fetch(`/caidas?desde=${desde}&hasta=${hasta}`);
-    const data = await res.json();
-    renderCaidasTable(data);
-  } catch (err) {
-    console.error("Error cargando caídas:", err);
-  }
-}
-
-function renderCaidasTable(list) {
-  const tbody = document.getElementById('caidasTableBody');
-  if (!list || list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">Sin caídas registradas en el período seleccionado</td></tr>';
-    return;
+  function exportData(format) {
+    window.open('/api/v2/events?limit=500', '_blank');
   }
 
-  // Agrupar caídas con la misma fecha/hora de inicio en un solo registro consolidado
-  const groupedMap = {};
-  list.forEach(c => {
-    const timeKey = formatTimeShort(c.inicio);
-    if (!groupedMap[timeKey]) {
-      groupedMap[timeKey] = { ...c, destinosList: [c.destino] };
-    } else {
-      if (!groupedMap[timeKey].destinosList.includes(c.destino)) {
-        groupedMap[timeKey].destinosList.push(c.destino);
-      }
-      if ((c.duracion_segundos || 0) > (groupedMap[timeKey].duracion_segundos || 0)) {
-        groupedMap[timeKey].duracion_segundos = c.duracion_segundos;
-      }
-    }
-  });
-
-  const groupedList = Object.values(groupedMap);
-
-  const ORIGEN_LABELS = {
-    'red_local': 'RED LOCAL / INTERNET',
-    'isp_primer_salto': 'ISP PRIMER SALTO',
-    'isp_general': 'ISP GENERAL',
-    'isp': 'ISP'
-  };
-
-  tbody.innerHTML = groupedList.map(c => {
-    let tagClass = 'tag-local';
-    if (c.origen === 'isp_general') tagClass = 'tag-isp-general';
-    else if (c.origen === 'isp_primer_salto') tagClass = 'tag-isp-primer';
-
-    const duracion = c.duracion_segundos ? formatDuration(c.duracion_segundos) : 'En curso';
-    const destDisplay = c.destinosList.length > 2 ? 'CORTE TOTAL DE RED (Todos)' : c.destinosList.join(', ');
-
-    return `
-      <tr>
-        <td><strong>${destDisplay}</strong></td>
-        <td class="${tagClass}">${ORIGEN_LABELS[c.origen] || c.origen.toUpperCase()}</td>
-        <td>${formatDate(c.inicio)}</td>
-        <td>${c.fin ? formatDate(c.fin) : '—'}</td>
-        <td>${duracion}</td>
-      </tr>
-    `;
-  }).join('');
-}
-
-async function loadDNSTable() {
-  const desde = document.getElementById('dateDesde').value || '2020-01-01';
-  const hasta = document.getElementById('dateHasta').value || '2099-12-31';
-  try {
-    const res = await fetch(`/dns?desde=${desde}&hasta=${hasta}`);
-    const data = await res.json();
-    renderDNSTable(data);
-  } catch (err) {
-    console.error("Error cargando DNS:", err);
-  }
-}
-
-function renderDNSTable(list) {
-  const tbody = document.getElementById('dnsTableBody');
-  if (!list || list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">Sin fallas DNS registradas en el período seleccionado</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = list.map(c => {
-    const duracion = c.duracion_segundos ? formatDuration(c.duracion_segundos) : 'En curso';
-    return `
-      <tr>
-        <td>${c.dominio}</td>
-        <td>${c.servidor_dns}</td>
-        <td>${formatDate(c.inicio)}</td>
-        <td>${c.fin ? formatDate(c.fin) : '—'}</td>
-        <td>${duracion}</td>
-      </tr>
-    `;
-  }).join('');
-}
-
-async function loadDegradacionesTable() {
-  const desde = document.getElementById('dateDesde').value || '2020-01-01';
-  const hasta = document.getElementById('dateHasta').value || '2099-12-31';
-  try {
-    const res = await fetch(`/degradaciones?desde=${desde}&hasta=${hasta}`);
-    const data = await res.json();
-    renderDegradacionesTable(data);
-  } catch (err) {
-    console.error("Error cargando degradaciones:", err);
-  }
-}
-
-function renderDegradacionesTable(list) {
-  const tbody = document.getElementById('degTableBody');
-  if (!tbody) return;
-  if (!list || list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">Sin eventos de lentitud registrados en el período seleccionado</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = list.map(c => {
-    const fuenteStr = c.fuente === 'oficial' ? 'OFICIAL (Ookla)' : (c.fuente === 'liviano' ? 'SONDA LIVIANA' : c.fuente.toUpperCase());
-    const duracion = c.fin ? (c.duracion_segundos ? formatDuration(c.duracion_segundos) : 'Finalizado') : (c.duracion_segundos === 0 ? 'Archivado V1' : 'En curso');
-    const isCritica = c.severidad === 'critica';
-    const tagClass = isCritica ? 'tag-isp-general' : 'tag-isp-primer';
-
-    return `
-      <tr>
-        <td><strong>${fuenteStr}</strong></td>
-        <td class="${tagClass}">${c.severidad ? c.severidad.toUpperCase() : 'DEGRADADA'}</td>
-        <td>${c.velocidad_mbps ? c.velocidad_mbps.toFixed(1) : 0} Mbps (base: ${c.baseline_mbps ? c.baseline_mbps.toFixed(0) : 0}M)</td>
-        <td>${formatDate(c.inicio)}</td>
-        <td>${duracion}</td>
-      </tr>
-    `;
-  }).join('');
-}
-
-function filterAll() {
-  loadCaidasTable();
-  loadDegradacionesTable();
-  loadDNSTable();
-  loadChartsData();
-}
-
-function downloadPDF() {
-  const desde = document.getElementById('dateDesde').value || '2020-01-01';
-  const hasta = document.getElementById('dateHasta').value || '2099-12-31';
-  window.open(`/reporte/pdf?desde=${desde}&hasta=${hasta}`, '_blank');
-}
-
-function getLocalDateString(d = new Date()) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function formatDate(isoStr) {
-  if (!isoStr) return '—';
-  const d = new Date(isoStr);
-  return d.toLocaleString('es-PE', {
-    day:'2-digit', month:'2-digit', year:'numeric',
-    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
-  });
-}
-
-function formatTimeShort(isoStr) {
-  if (!isoStr) return '—';
-  const d = new Date(isoStr);
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
-}
-
-function formatTimeAgo(isoStr) {
-  if (!isoStr) return '—';
-  const sec = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
-  if (sec < 60) return `hace ${sec}s`;
-  if (sec < 3600) return `hace ${Math.floor(sec / 60)} min`;
-  return `hace ${Math.floor(sec / 3600)} h`;
-}
-
-function formatDuration(sec) {
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
-  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
-}
-
-function init() {
-  const todayStr = getLocalDateString();
-  document.getElementById('dateDesde').value = todayStr;
-  document.getElementById('dateHasta').value = todayStr;
-
-  fetchStatus();
-  loadChartsData();
-  loadCaidasTable();
-  loadDegradacionesTable();
-  loadDNSTable();
-
+  // Periodic polling
   setInterval(() => {
     fetchStatus();
-    loadChartsData();
-  }, 10000);
-}
+    fetchActivity();
+    fetchSensors();
+    if (currentView === 'events') fetchEvents();
+  }, 3000);
 
-init();
+  // Initial load
+  fetchStatus();
+  fetchActivity();
+  fetchSensors();
+  fetchEvents();
 </script>
 </body>
-</html>"""
+</html>
+"""

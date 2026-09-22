@@ -12,6 +12,8 @@ from db import (
     get_v2_fsm_history,
     get_v2_events,
     get_active_v2_event,
+    get_v2_fast_readings,
+    get_v2_timeline_data,
 )
 
 router = APIRouter(prefix="/api/v2", tags=["v2"])
@@ -38,19 +40,29 @@ async def get_v2_status():
             "SELECT * FROM v2_l1_readings ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
 
-        # Última lectura L2
+        # Última lectura Fast.com
+        last_fast = conn.execute(
+            "SELECT * FROM v2_fast_readings ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+        # Última lectura L2 (Ookla)
         last_l2 = conn.execute(
             "SELECT * FROM v2_l2_readings ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
 
+    current_state = last_fsm["next_state"] if last_fsm else "NORMAL"
+    l1_interval = 1 if current_state == "SOSPECHA" else 5
+
     return {
         "engine_version": "V2.0",
-        "current_state": last_fsm["next_state"] if last_fsm else "NORMAL",
+        "current_state": current_state,
+        "l1_adaptive_interval_s": l1_interval,
         "active_event": active_event,
         "latest_fsm_transition": dict(last_fsm) if last_fsm else None,
         "latest_readings": {
             "l0": dict(last_l0) if last_l0 else None,
             "l1": dict(last_l1) if last_l1 else None,
+            "fast": dict(last_fast) if last_fast else None,
             "l2": dict(last_l2) if last_l2 else None,
         },
     }
@@ -70,16 +82,85 @@ async def get_events(limit: int = Query(default=50, le=200)):
 
 @router.get("/readings")
 async def get_readings(
-    sensor: str = Query(default="l1", regex="^(l0|l1|l2)$"),
+    sensor: str = Query(default="l1", pattern="^(l0|l1|l2|fast)$"),
     limit: int = Query(default=50, le=500),
 ):
-    """Retorna las lecturas históricas de un sensor específico (l0, l1, l2)."""
+    """Retorna las lecturas históricas de un sensor específico (l0, l1, l2, fast)."""
     table_name = f"v2_{sensor}_readings"
     with get_connection() as conn:
         rows = conn.execute(
             f"SELECT * FROM {table_name} ORDER BY timestamp DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+@router.get("/timeline")
+async def get_timeline(limit: int = Query(default=150, le=500)):
+    """Retorna datos unificados y sincronizados para la Línea de Tiempo V2."""
+    return get_v2_timeline_data(limit=limit)
+
+
+@router.get("/sensors-status")
+async def get_sensors_status():
+    """Retorna el estado de los 4 sensores (L0, L1, Fast, Ookla) con motivos de ejecución."""
+    with get_connection() as conn:
+        last_fsm = conn.execute(
+            "SELECT * FROM v2_fsm_history ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        last_l0 = conn.execute(
+            "SELECT * FROM v2_l0_readings ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        last_l1 = conn.execute(
+            "SELECT * FROM v2_l1_readings ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        last_fast = conn.execute(
+            "SELECT * FROM v2_fast_readings ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        last_l2 = conn.execute(
+            "SELECT * FROM v2_l2_readings ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+    current_state = last_fsm["next_state"] if last_fsm else "NORMAL"
+    l1_interval = 1 if current_state == "SOSPECHA" else 5
+
+    # Determinar estado y motivo de ejecución para Fast.com y Ookla
+    fast_status = {
+        "sensor": "FAST.COM",
+        "last_reading": dict(last_fast) if last_fast else None,
+        "is_executed": last_fast is not None,
+        "reason": (
+            "Ejecutado como filtro de confirmación intermedia"
+            if current_state in ("SOSPECHA", "CONFIRMANDO", "EVENTO")
+            else "No ejecutado — motivo: no necesario en estado NORMAL"
+        ),
+    }
+
+    ookla_status = {
+        "sensor": "OOKLA",
+        "last_reading": dict(last_l2) if last_l2 else None,
+        "is_executed": last_l2 is not None,
+        "reason": (
+            "Ejecutado como confirmación pesada final"
+            if current_state in ("CONFIRMANDO", "EVENTO")
+            else "No ejecutado — motivo: no necesario sin confirmación de Fast.com o falla L0"
+        ),
+    }
+
+    return {
+        "current_fsm_state": current_state,
+        "l0": {
+            "sensor": "L0 CONECTIVIDAD",
+            "interval_seconds": 60,
+            "last_reading": dict(last_l0) if last_l0 else None,
+        },
+        "l1": {
+            "sensor": "L1 MICRO-THROUGHPUT",
+            "interval_seconds": l1_interval,
+            "last_reading": dict(last_l1) if last_l1 else None,
+        },
+        "fast": fast_status,
+        "ookla": ookla_status,
+    }
 
 
 @router.get("/diagnostic")
