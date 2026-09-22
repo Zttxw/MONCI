@@ -93,5 +93,11 @@ class ResumenEstado(BaseModel):
     isp_hop_ip: Optional[str] = None
     probe_liviano_count: int = 0
     probe_liviano_baseline: Optional[float] = None
+    # --- FSM V2 Mealy ---
+    fsm_state: str = "NORMAL"                # "NORMAL" | "SOSPECHA" | "CONFIRMANDO" | "EVENTO"
+    recovery_counter: int = 0
+    recovery_k: int = 3
+    input_symbol: Optional[str] = None
+    active_event: Optional[dict] = None
 
 

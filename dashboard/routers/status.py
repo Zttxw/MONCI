@@ -237,8 +237,47 @@ def _get_probe_liviano_stats() -> tuple[int, float | None]:
 
 @router.get("/api/status", response_model=ResumenEstado)
 async def api_status():
-    """Estado actual en formato JSON."""
+    """Estado actual en formato JSON (alineado con la FSM Mealy V2)."""
     count, baseline = _get_probe_liviano_stats()
+
+    fsm_state = "NORMAL"
+    recovery_counter = 0
+    recovery_k = 3
+    input_symbol = None
+    active_event = None
+
+    with get_connection() as conn:
+        fsm_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_fsm_history'"
+        ).fetchone()
+        if fsm_check:
+            last_fsm = conn.execute(
+                "SELECT * FROM v2_fsm_history ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            if last_fsm:
+                fsm_state = last_fsm["next_state"]
+                input_symbol = last_fsm["input_symbol"]
+                readings_json = last_fsm["readings_json"]
+                if readings_json:
+                    import json
+                    try:
+                        rj = json.loads(readings_json) if isinstance(readings_json, str) else readings_json
+                        if "fsm" in rj:
+                            recovery_counter = rj["fsm"].get("recovery_counter", 0)
+                            recovery_k = rj["fsm"].get("recovery_k", 3)
+                    except Exception:
+                        pass
+
+        ev_check = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='v2_events'"
+        ).fetchone()
+        if ev_check:
+            row_ev = conn.execute(
+                "SELECT * FROM v2_events WHERE is_active = 1 ORDER BY start_time DESC LIMIT 1"
+            ).fetchone()
+            if row_ev:
+                active_event = dict(row_ev)
+
     return ResumenEstado(
         destinos=_get_estado_destinos(),
         ultima_velocidad=_get_ultima_velocidad(),
@@ -248,6 +287,11 @@ async def api_status():
         isp_hop_ip=get_metadata("isp_hop"),
         probe_liviano_count=count,
         probe_liviano_baseline=baseline,
+        fsm_state=fsm_state,
+        recovery_counter=recovery_counter,
+        recovery_k=recovery_k,
+        input_symbol=input_symbol,
+        active_event=active_event,
     )
 
 
@@ -454,7 +498,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <h1>Control Internet</h1>
         <div class="brand-meta">
           <span class="status-pill" id="topStatusPill"><span class="status-dot"></span><span id="topStatusText">Operativo</span></span>
-          <span class="brand-sub">Gateway <span id="brandGatewayIp" class="mono">192.168.0.1</span> · sonda cada 60s · test oficial cada 10 min</span>
+          <span class="brand-sub">Gateway <span id="brandGatewayIp" class="mono">192.168.0.1</span> · Sonda Continua L0/L1 · Ookla L2 Bajo Demanda</span>
         </div>
       </div>
     </div>
@@ -486,11 +530,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <div class="stat-card c-green">
       <div class="stat-head">
-        <span class="stat-label">DESCARGA · TEST OFICIAL</span>
+        <span class="stat-label">DESCARGA · OOKLA L2</span>
         <div class="stat-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2CA792" stroke-width="2.3"><path d="M12 4v13M7 12l5 5 5-5"/></svg></div>
       </div>
       <div class="stat-value"><span id="statSpeedOfficial">—</span> <span style="font-size:13px; color:var(--text-faint); font-weight:500;">Mbps</span></div>
-      <div class="stat-sub" id="statSpeedTime">Ookla · multihilo</div>
+      <div class="stat-sub" id="statSpeedTime">Ookla L2 · Bajo Demanda</div>
     </div>
 
     <div class="stat-card c-gold">
@@ -762,36 +806,65 @@ function renderTopAndCards(data) {
   const isL2Fresh = data.ultima_velocidad && data.ultima_velocidad.timestamp &&
     (Math.floor((Date.now() - new Date(data.ultima_velocidad.timestamp).getTime()) / 1000) <= FRESHNESS_L2_MAX_SEC);
 
-  // Valor de velocidad para el Hero Banner (priorizar L1 fresco, sino L2 fresco)
   const speedVal = isL1Fresh ? data.ultimo_probe_liviano.mbps_aproximado : (isL2Fresh ? data.ultima_velocidad.descarga_mbps : null);
+
+  const fsmState = data.fsm_state || "NORMAL";
+  const recCount = data.recovery_counter || 0;
+  const recK = data.recovery_k || 3;
+  const activeEv = data.active_event;
 
   if (caidasActivas.length > 0) {
     topPill.className = 'status-pill down';
-    topText.textContent = `${caidasActivas.length} alerta activa`;
+    topText.textContent = `FSM: EVENTO (${caidasActivas.length} alerta)`;
 
     const firstDown = caidasActivas[0];
     const durStr = firstDown.desde ? formatTimeAgo(firstDown.desde) : '';
     heroBanner.className = 'hero-banner hero-alert';
     heroBadge.textContent = '🔴';
     heroHeadline.textContent = 'SIN INTERNET — CAÍDA TOTAL EN CURSO';
-    heroSub.textContent = `La conexión hacia ${firstDown.destino} está interrumpida desde las ${formatTimeShort(firstDown.desde)} (${durStr}).`;
-  } else if (isL1Fresh && data.ultimo_probe_liviano.mbps_aproximado < 100) {
-    topPill.className = 'status-pill';
-    topText.textContent = 'Lentitud Detectada';
+    heroSub.textContent = `La conexión hacia ${firstDown.destino} está interrumpida desde las ${formatTimeShort(firstDown.desde)} (${durStr}). Origen: FSM V2.`;
+  } else if (fsmState === 'CONFIRMANDO') {
+    topPill.className = 'status-pill warn';
+    topText.textContent = 'FSM: CONFIRMANDO';
+
+    heroBanner.className = 'hero-banner hero-warn';
+    heroBadge.textContent = '🟠';
+    heroHeadline.textContent = 'CONFIRMANDO — L2 EN EJECUCIÓN (PRUEBA BAJO DEMANDA)';
+    heroSub.textContent = 'La FSM activó la prueba pesada L2 (Ookla/Speedtest) bajo demanda para validar la anomalía. No es un monitoreo periódico.';
+  } else if (fsmState === 'SOSPECHA') {
+    topPill.className = 'status-pill warn';
+    topText.textContent = 'FSM: SOSPECHA';
 
     heroBanner.className = 'hero-banner hero-warn';
     heroBadge.textContent = '🟡';
-    heroHeadline.textContent = `LENTITUD EN CURSO — SONDA EN ${data.ultimo_probe_liviano.mbps_aproximado.toFixed(0)} Mbps`;
-    heroSub.textContent = `La sonda de monitoreo continuo registra velocidad reducida respecto al baseline.`;
+    heroHeadline.textContent = 'SOSPECHA DETECTADA — EVALUANDO EVIDENCIA L0/L1';
+    heroSub.textContent = 'La sonda continua registró lecturas anómalas. La FSM se encuentra acumulando evidencia en estado SOSPECHA.';
+  } else if (fsmState === 'EVENTO') {
+    topPill.className = 'status-pill down';
+    if (recCount > 0) {
+      topText.textContent = `FSM: EVENTO (Recuperación: ${recCount}/${recK})`;
+      heroBanner.className = 'hero-banner hero-warn';
+      heroBadge.textContent = '🟡';
+      heroHeadline.textContent = `EVENTO EN RECUPERACIÓN — ${recCount}/${recK} MUESTRAS SANAS`;
+      heroSub.textContent = `Lectura saludable registrada. La FSM permanecerá en EVENTO hasta completar ${recK}/${recK} lecturas sanas consecutivas (1/3 y 2/3 NO significan NORMAL).`;
+    } else {
+      topText.textContent = 'FSM: EVENTO';
+      heroBanner.className = 'hero-banner hero-alert';
+      heroBadge.textContent = '🔴';
+      const evType = activeEv ? activeEv.event_type : 'DEGRADACIÓN CONFIRMADA';
+      const evDiag = activeEv ? (activeEv.diagnosis_code || activeEv.state_origin) : 'L2 Confirmado';
+      heroHeadline.textContent = `EVENTO V2 EN CURSO — ${evType}`;
+      heroSub.textContent = `Diagnóstico: ${evDiag}. Confirmado por L2 bajo demanda.`;
+    }
   } else {
-    topPill.className = 'status-pill';
-    topText.textContent = 'Sin alertas';
+    topPill.className = 'status-pill ok';
+    topText.textContent = 'FSM: NORMAL';
 
     heroBanner.className = 'hero-banner hero-ok';
     heroBadge.textContent = '🟢';
     const mbpsText = speedVal ? `${speedVal.toFixed(0)} Mbps` : 'OPERATIVO';
     heroHeadline.textContent = `INTERNET OK — VELOCIDAD EN ${mbpsText}`;
-    heroSub.textContent = 'La conexión de la oficina funciona con normalidad sin interrupciones ni degradaciones activas.';
+    heroSub.textContent = 'La conexión de la oficina funciona con normalidad. FSM Mealy en estado NORMAL.';
   }
 
   // Stat Card 1: Latencia
@@ -802,12 +875,12 @@ function renderTopAndCards(data) {
     document.getElementById('panelBadgeLatencia').textContent = `${data.ultima_velocidad.ping_ms.toFixed(0)} ms`;
   }
 
-  // Stat Card 2: Test Oficial
+  // Stat Card 2: Test Oficial Ookla L2
   if (data.ultima_velocidad && data.ultima_velocidad.descarga_mbps) {
     document.getElementById('statSpeedOfficial').textContent = data.ultima_velocidad.descarga_mbps.toFixed(0);
     const timeAgo = formatTimeAgo(data.ultima_velocidad.timestamp);
-    const staleLabel = isL2Fresh ? '' : ' ⚠️ (datos antiguos)';
-    document.getElementById('statSpeedTime').textContent = `Ookla · multihilo · ${timeAgo}${staleLabel}`;
+    const staleLabel = isL2Fresh ? '' : ' ⚠️ (anterior)';
+    document.getElementById('statSpeedTime').textContent = `Ookla L2 · Bajo Demanda · ${timeAgo}${staleLabel}`;
   }
 
   // Stat Card 3: Sonda Continua (PycURL)
